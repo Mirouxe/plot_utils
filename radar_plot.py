@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 
 
 def safe_divide(a, b):
@@ -191,6 +192,66 @@ def analyze_max_distribution(csv_folder, column_name, pattern="*.csv", plot=True
     }
 
     return results
+
+
+def plot_csv_curves_interactive(
+    folder_path,
+    x_column,
+    y_column,
+    pattern="*.csv",
+    opacity=0.35,
+    line_width=2,
+    output_html=None,
+):
+    """
+    Lit tous les CSV d'un dossier et trace y_column en fonction de x_column
+    sur un graphique interactif Plotly avec transparence des courbes.
+    """
+    files = glob.glob(os.path.join(folder_path, pattern))
+    if not files:
+        raise ValueError(f"Aucun fichier CSV trouvé dans {folder_path}")
+
+    fig = go.Figure()
+
+    for file in files:
+        df = pd.read_csv(file)
+
+        if x_column not in df.columns:
+            raise ValueError(f"Colonne '{x_column}' absente dans {file}")
+        if y_column not in df.columns:
+            raise ValueError(f"Colonne '{y_column}' absente dans {file}")
+
+        csv_name = os.path.basename(file)
+
+        fig.add_trace(go.Scatter(
+            x=df[x_column],
+            y=df[y_column],
+            mode="lines",
+            name=csv_name,
+            opacity=opacity,
+            line={"width": line_width},
+            hovertemplate=(
+                f"<b>{csv_name}</b><br>"
+                + f"{x_column} = %{{x}}<br>"
+                + f"{y_column} = %{{y}}<br>"
+                + "<extra></extra>"
+            ),
+        ))
+
+    fig.update_layout(
+        title=f"{y_column} en fonction de {x_column}",
+        xaxis_title=x_column,
+        yaxis_title=y_column,
+        hovermode="closest",
+        template="plotly_white",
+    )
+
+    if output_html:
+        fig.write_html(output_html)
+        print(f"Figure interactive sauvegardée : {output_html}")
+
+    fig.show()
+    return fig
 
 
 def main():

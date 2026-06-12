@@ -18,6 +18,7 @@ pip install -r requirements.txt
 - numpy
 - matplotlib
 - openpyxl
+- plotly
 
 ## Usage
 
@@ -49,6 +50,27 @@ max_values = plot_radar_from_df(
     title="Maxima des grandeurs"
 )
 ```
+
+## Courbes interactives multi-CSV
+
+Le module contient aussi une fonction Plotly pour afficher une grandeur en fonction d'une autre sur tous les CSV d'un dossier, avec survol interactif et transparence des courbes.
+
+```python
+from radar_plot import plot_csv_curves_interactive
+
+fig = plot_csv_curves_interactive(
+    folder_path="mes_csv",
+    x_column="temps",
+    y_column="temperature",
+    opacity=0.35,
+    output_html="courbes_interactives.html",
+)
+```
+
+Au survol, tu vois :
+- le nom du CSV,
+- la coordonnée en abscisse,
+- la coordonnée en ordonnée.
 
 ## Analyse statistique d'un ensemble de CSV
 
