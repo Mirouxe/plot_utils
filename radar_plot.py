@@ -201,11 +201,16 @@ def plot_csv_curves_interactive(
     pattern="*.csv",
     opacity=0.35,
     line_width=2,
+    highlight_opacity=1.0,
+    highlight_line_width=4,
     output_html=None,
 ):
     """
     Lit tous les CSV d'un dossier et trace y_column en fonction de x_column
     sur un graphique interactif Plotly avec transparence des courbes.
+
+    Si output_html est fourni, le HTML généré ajoute une mise en surbrillance
+    de la courbe survolée ou cliquée.
     """
     files = glob.glob(os.path.join(folder_path, pattern))
     if not files:
@@ -247,7 +252,53 @@ def plot_csv_curves_interactive(
     )
 
     if output_html:
-        fig.write_html(output_html)
+        div_id = "plot_utils_interactive_curves"
+        post_script = f"""
+const gd = document.getElementById('{div_id}');
+const baseOpacity = {opacity};
+const baseWidth = {line_width};
+const highlightOpacity = {highlight_opacity};
+const highlightWidth = {highlight_line_width};
+let lockedCurve = null;
+
+function restyleCurve(curveNumber) {{
+  const opacities = gd.data.map((_, i) => (i === curveNumber ? highlightOpacity : baseOpacity));
+  const widths = gd.data.map((_, i) => (i === curveNumber ? highlightWidth : baseWidth));
+  Plotly.restyle(gd, {{opacity: opacities, 'line.width': widths}});
+}}
+
+function resetCurves() {{
+  const opacities = gd.data.map(() => baseOpacity);
+  const widths = gd.data.map(() => baseWidth);
+  Plotly.restyle(gd, {{opacity: opacities, 'line.width': widths}});
+}}
+
+gd.on('plotly_hover', function(evt) {{
+  if (lockedCurve === null && evt.points && evt.points.length > 0) {{
+    restyleCurve(evt.points[0].curveNumber);
+  }}
+}});
+
+gd.on('plotly_unhover', function() {{
+  if (lockedCurve === null) {{
+    resetCurves();
+  }}
+}});
+
+gd.on('plotly_click', function(evt) {{
+  if (evt.points && evt.points.length > 0) {{
+    const curve = evt.points[0].curveNumber;
+    if (lockedCurve === curve) {{
+      lockedCurve = null;
+      resetCurves();
+    }} else {{
+      lockedCurve = curve;
+      restyleCurve(curve);
+    }}
+  }}
+}});
+"""
+        fig.write_html(output_html, div_id=div_id, post_script=post_script)
         print(f"Figure interactive sauvegardée : {output_html}")
 
     fig.show()

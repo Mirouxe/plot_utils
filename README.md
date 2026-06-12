@@ -63,6 +63,8 @@ fig = plot_csv_curves_interactive(
     x_column="temps",
     y_column="temperature",
     opacity=0.35,
+    highlight_opacity=1.0,
+    highlight_line_width=4,
     output_html="courbes_interactives.html",
 )
 ```
@@ -71,6 +73,11 @@ Au survol, tu vois :
 - le nom du CSV,
 - la coordonnée en abscisse,
 - la coordonnée en ordonnée.
+
+Si `output_html` est fourni, le HTML généré permet aussi :
+- de **mettre en surbrillance** la courbe survolée,
+- de **verrouiller** une courbe par clic,
+- de **déverrouiller** par un second clic.
 
 ## Analyse statistique d'un ensemble de CSV
 
