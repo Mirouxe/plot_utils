@@ -73,6 +73,21 @@ def plot_radar(max_values: pd.Series, title: str, output_path: Path | None = Non
         plt.show()
 
 
+def plot_radar_from_df(
+    df: pd.DataFrame,
+    columns: list[str],
+    output_path: str = "radar_maxima.png",
+    title: str = "Radar des maxima",
+) -> pd.Series:
+    """
+    Calcule les maxima des colonnes demandées dans un DataFrame,
+    trace le radar associé, sauvegarde la figure et retourne les maxima.
+    """
+    max_values = compute_maxima(df, columns)
+    plot_radar(max_values, title=title, output_path=Path(output_path))
+    return max_values
+
+
 def main():
     parser = argparse.ArgumentParser(description="Trace un radar des maxima de grandeurs physiques depuis un Excel.")
     parser.add_argument("excel_path", help="Chemin vers le fichier Excel")
@@ -101,12 +116,15 @@ def main():
 
     df = pd.read_excel(args.excel_path, sheet_name=args.sheet)
     df = add_derived_columns(df)
-    max_values = compute_maxima(df, args.columns)
+    max_values = plot_radar_from_df(
+        df,
+        columns=args.columns,
+        output_path=args.output,
+        title=args.title,
+    )
 
     print("Maxima retenus :")
     print(max_values)
-
-    plot_radar(max_values, args.title, Path(args.output))
 
 
 if __name__ == "__main__":

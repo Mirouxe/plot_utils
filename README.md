@@ -35,6 +35,21 @@ Le script crée automatiquement, si les colonnes existent :
 - `ratio_contrainte_deformation = contrainte / deformation` (division protégée)
 - `norme_vitesse = sqrt(Ux^2 + Uy^2 + Uz^2)`
 
+## Fonction réutilisable
+
+Tu peux aussi importer directement la fonction dans ton code :
+
+```python
+from radar_plot import plot_radar_from_df
+
+max_values = plot_radar_from_df(
+    df,
+    columns=["temperature", "pression", "vitesse", "contrainte"],
+    output_path="figures/radar.png",
+    title="Maxima des grandeurs"
+)
+```
+
 ## Personnalisation
 
 Modifie la fonction `add_derived_columns()` dans `radar_plot.py` pour ajouter tes propres opérations métier.
