@@ -1,4 +1,6 @@
 import argparse
+import glob
+import os
 from pathlib import Path
 
 import numpy as np
@@ -86,6 +88,109 @@ def plot_radar_from_df(
     max_values = compute_maxima(df, columns)
     plot_radar(max_values, title=title, output_path=Path(output_path))
     return max_values
+
+
+def analyze_max_distribution(csv_folder, column_name, pattern="*.csv", plot=True):
+    """
+    Lit un ensemble de CSV, calcule le max d'une colonne pour chaque fichier,
+    trace la distribution et retourne les statistiques principales.
+
+    Remarque : sous hypothèse gaussienne, la règle usuelle est ~68% dans ±1σ
+    et ~95% dans ±2σ autour de la moyenne.
+    """
+    files = glob.glob(os.path.join(csv_folder, pattern))
+    if not files:
+        raise ValueError(f"Aucun fichier trouvé dans {csv_folder} avec le pattern {pattern}")
+
+    max_data = []
+    for file in files:
+        df = pd.read_csv(file)
+
+        if column_name not in df.columns:
+            raise ValueError(f"Colonne '{column_name}' absente dans {file}")
+
+        max_val = df[column_name].max()
+        max_data.append({
+            "file": os.path.basename(file),
+            "max_value": max_val,
+        })
+
+    res_df = pd.DataFrame(max_data)
+    x = res_df["max_value"].values
+
+    mean_x = np.mean(x)
+    std_x = np.std(x, ddof=1)
+    min_x = np.min(x)
+    max_x = np.max(x)
+    median_x = np.median(x)
+
+    q05 = np.quantile(x, 0.05)
+    q50 = np.quantile(x, 0.50)
+    q66 = np.quantile(x, 0.66)
+    q95 = np.quantile(x, 0.95)
+
+    lower_bound = mean_x + std_x
+    upper_bound = mean_x + 2 * std_x
+
+    tranche_df = res_df[
+        (res_df["max_value"] >= lower_bound) &
+        (res_df["max_value"] <= upper_bound)
+    ]
+
+    if len(tranche_df) > 0:
+        highest_point_in_slice = tranche_df.loc[tranche_df["max_value"].idxmax()]
+    else:
+        highest_point_in_slice = None
+
+    if plot:
+        plt.figure(figsize=(10, 6))
+        plt.scatter(range(len(x)), x, color="steelblue", label="Max par configuration")
+        plt.axhline(mean_x, color="green", linestyle="-", label=f"Moyenne = {mean_x:.3g}")
+        plt.axhline(mean_x + std_x, color="orange", linestyle="--", label=f"+1σ = {lower_bound:.3g}")
+        plt.axhline(mean_x + 2 * std_x, color="red", linestyle="--", label=f"+2σ = {upper_bound:.3g}")
+        plt.axhline(q66, color="purple", linestyle=":", label=f"Q66 = {q66:.3g}")
+        plt.axhline(q95, color="brown", linestyle=":", label=f"Q95 = {q95:.3g}")
+        plt.xlabel("Configuration")
+        plt.ylabel(f"Max {column_name}")
+        plt.title(f"Distribution des maxima de '{column_name}'")
+        plt.legend()
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.show()
+
+        plt.figure(figsize=(8, 5))
+        plt.hist(x, bins=15, color="lightblue", edgecolor="black", alpha=0.7)
+        plt.axvline(mean_x, color="green", linestyle="-", label=f"Moyenne = {mean_x:.3g}")
+        plt.axvline(lower_bound, color="orange", linestyle="--", label=f"+1σ = {lower_bound:.3g}")
+        plt.axvline(upper_bound, color="red", linestyle="--", label=f"+2σ = {upper_bound:.3g}")
+        plt.axvline(q66, color="purple", linestyle=":", label=f"Q66 = {q66:.3g}")
+        plt.axvline(q95, color="brown", linestyle=":", label=f"Q95 = {q95:.3g}")
+        plt.xlabel(f"Max {column_name}")
+        plt.ylabel("Fréquence")
+        plt.title("Histogramme des maxima")
+        plt.legend()
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.show()
+
+    results = {
+        "data": res_df,
+        "mean": mean_x,
+        "std": std_x,
+        "min": min_x,
+        "max": max_x,
+        "median": median_x,
+        "q05": q05,
+        "q50": q50,
+        "q66": q66,
+        "q95": q95,
+        "sigma_lower": lower_bound,
+        "sigma_upper": upper_bound,
+        "slice_data": tranche_df,
+        "highest_point_between_1sigma_2sigma": highest_point_in_slice,
+    }
+
+    return results
 
 
 def main():

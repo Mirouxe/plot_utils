@@ -50,6 +50,28 @@ max_values = plot_radar_from_df(
 )
 ```
 
+## Analyse statistique d'un ensemble de CSV
+
+Le module contient aussi une fonction pour :
+- lire plusieurs CSV,
+- calculer le max d'une grandeur par configuration,
+- tracer la distribution,
+- afficher moyenne, quantiles et seuils en sigma,
+- récupérer le point le plus haut entre `mean + 1σ` et `mean + 2σ`.
+
+```python
+from radar_plot import analyze_max_distribution
+
+results = analyze_max_distribution(
+    csv_folder="mes_csv",
+    column_name="temperature",
+    pattern="*.csv",
+    plot=True,
+)
+
+print(results["highest_point_between_1sigma_2sigma"])
+```
+
 ## Personnalisation
 
 Modifie la fonction `add_derived_columns()` dans `radar_plot.py` pour ajouter tes propres opérations métier.
@@ -57,3 +79,4 @@ Modifie la fonction `add_derived_columns()` dans `radar_plot.py` pour ajouter te
 ## Remarque
 
 Le radar est ici tracé avec les **valeurs brutes**, sans normalisation, conformément au besoin de visualisation directe des maxima.
+Sous hypothèse gaussienne, la règle usuelle est environ **68% dans ±1σ** et **95% dans ±2σ** autour de la moyenne.
