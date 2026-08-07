@@ -286,10 +286,13 @@ Le HTML produit ajoute, en plus du zoom et de la légende cliquable de Plotly :
 | --- | --- |
 | survol d'une courbe | la courbe passe au premier plan, les autres s'estompent |
 | clic | verrouille la courbe mise en évidence |
-| double-clic | rétablit l'affichage complet |
-| champ `filtrer` | expression régulière sur l'étiquette des configurations |
+| bouton `réinitialiser` | annule le verrouillage et le filtre |
+| champ de filtrage | expression régulière sur l'étiquette des configurations |
 | clic sur la légende | masque un groupe entier |
 | glisser sur un axe (coordonnées parallèles) | filtre les configurations |
+
+La mise en évidence porte sur la **configuration** et non sur la trace : dans une planche de
+bord multi-grandeurs, survoler une courbe la met en avant dans tous les sous-graphiques.
 
 Réglages : `interactivity=False` pour désactiver, ou
 `interactivity={"dimOpacity": 0.05, "search": False}` pour ajuster.

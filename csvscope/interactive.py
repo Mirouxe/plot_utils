@@ -37,9 +37,14 @@ _JS = r"""
   var gd = document.getElementById('{plot_id}');
   if (!gd || !gd.data) { return; }
   var cfg = (gd.layout && gd.layout.meta && gd.layout.meta.csvscope) || {};
-  var targets = [];
+  var targets = [], keys = [], searchable = [];
   gd.data.forEach(function (trace, index) {
-    if (trace.meta && trace.meta.label) { targets.push(index); }
+    if (trace.meta && trace.meta.label) {
+      targets.push(index);
+      // La configuration est l'identité ; l'étiquette d'affichage peut être ambiguë.
+      keys.push(String(trace.meta.config || trace.meta.label));
+      searchable.push(String(trace.meta.label) + ' ' + String(trace.meta.config || ''));
+    }
   });
   if (!targets.length) { return; }
 
@@ -47,22 +52,25 @@ _JS = r"""
   var dimOpacity = cfg.dimOpacity == null ? 0.08 : cfg.dimOpacity;
   var baseWidth = cfg.baseWidth == null ? 1.9 : cfg.baseWidth;
   var focusWidth = cfg.focusWidth == null ? 3.6 : cfg.focusWidth;
-  var labels = targets.map(function (i) { return String(gd.data[i].meta.label); });
+  // Une configuration peut porter plusieurs traces (sous-graphiques, menus) :
+  // survoler l'une d'elles met donc en évidence toutes les traces de cette configuration.
+  var unique = keys.filter(function (key, index) { return keys.indexOf(key) === index; });
   var locked = null;
   var filterRe = null;
+  var input = null;
+  var counter = null;
 
-  function matches(i) { return filterRe === null || filterRe.test(labels[i]); }
+  function kept(index) { return filterRe === null || filterRe.test(searchable[index]); }
 
-  function apply(focusIndex) {
+  function apply(focus) {
     var opacity = [], width = [], hover = [];
     for (var i = 0; i < targets.length; i++) {
-      var visible = matches(i);
-      var focused = focusIndex === null ? null : targets[focusIndex] === targets[i];
-      if (!visible) {
+      if (!kept(i)) {
         opacity.push(0); width.push(baseWidth); hover.push('skip');
-      } else if (focusIndex === null) {
+      } else if (!focus) {
         opacity.push(baseOpacity); width.push(baseWidth); hover.push('all');
       } else {
+        var focused = keys[i] === focus;
         opacity.push(focused ? 1 : dimOpacity);
         width.push(focused ? focusWidth : baseWidth);
         hover.push('all');
@@ -71,52 +79,88 @@ _JS = r"""
     Plotly.restyle(gd, { opacity: opacity, 'line.width': width, hoverinfo: hover }, targets);
   }
 
+  function updateCounter() {
+    if (!counter) { return; }
+    if (filterRe === null) {
+      counter.textContent = unique.length + ' configurations';
+      return;
+    }
+    var visible = unique.filter(function (key) {
+      return keys.some(function (candidate, index) { return candidate === key && kept(index); });
+    }).length;
+    counter.textContent = visible + ' / ' + unique.length + ' configurations';
+  }
+
+  function reset() {
+    locked = null;
+    filterRe = null;
+    if (input) { input.value = ''; }
+    updateCounter();
+    apply(null);
+  }
+
+  function keyAt(event) {
+    if (!event.points || !event.points.length) { return null; }
+    var position = targets.indexOf(event.points[0].curveNumber);
+    return position < 0 ? null : keys[position];
+  }
+
   if (cfg.highlight !== false) {
-    gd.on('plotly_hover', function (evt) {
-      if (locked !== null || !evt.points || !evt.points.length) { return; }
-      var position = targets.indexOf(evt.points[0].curveNumber);
-      if (position >= 0) { apply(position); }
+    gd.on('plotly_hover', function (event) {
+      if (locked !== null) { return; }
+      var key = keyAt(event);
+      if (key !== null) { apply(key); }
     });
     gd.on('plotly_unhover', function () { if (locked === null) { apply(null); } });
-    gd.on('plotly_click', function (evt) {
-      if (!evt.points || !evt.points.length) { return; }
-      var position = targets.indexOf(evt.points[0].curveNumber);
-      if (position < 0) { return; }
-      locked = locked === position ? null : position;
+    gd.on('plotly_click', function (event) {
+      var key = keyAt(event);
+      if (key === null) { return; }
+      locked = locked === key ? null : key;
       apply(locked);
     });
     gd.on('plotly_doubleclick', function () { locked = null; apply(null); });
   }
 
-  if (cfg.search !== false) {
+  if (cfg.search !== false || cfg.highlight !== false) {
     var bar = document.createElement('div');
     bar.style.cssText = 'display:flex;gap:8px;align-items:center;margin:6px 0 2px 0;' +
-      'font:13px Inter,Segoe UI,Helvetica,Arial,sans-serif;color:#374151;';
-    var input = document.createElement('input');
-    input.type = 'search';
-    input.placeholder = cfg.searchPlaceholder || 'filtrer (regex)…';
-    input.style.cssText = 'flex:0 1 320px;padding:5px 9px;border:1px solid #d1d5db;' +
-      'border-radius:6px;font-size:13px;';
-    var counter = document.createElement('span');
-    counter.style.cssText = 'color:#6b7280;font-size:12px;';
-    counter.textContent = targets.length + ' configurations';
-    bar.appendChild(input);
-    bar.appendChild(counter);
-    gd.parentNode.insertBefore(bar, gd);
+      'font:13px Inter,Segoe UI,Helvetica,Arial,sans-serif;color:#374151;' +
+      '-webkit-user-select:none;user-select:none;';
 
-    input.addEventListener('input', function () {
-      var text = input.value.trim();
-      if (!text) {
-        filterRe = null;
-      } else {
-        try { filterRe = new RegExp(text, 'i'); } catch (err) { return; }
-      }
-      var kept = 0;
-      for (var i = 0; i < targets.length; i++) { if (matches(i)) { kept++; } }
-      counter.textContent = kept + ' / ' + targets.length + ' configurations';
-      locked = null;
-      apply(null);
-    });
+    if (cfg.search !== false) {
+      input = document.createElement('input');
+      input.type = 'search';
+      input.placeholder = cfg.searchPlaceholder || 'filtrer (regex)…';
+      input.style.cssText = 'flex:0 1 320px;padding:5px 9px;border:1px solid #d1d5db;' +
+        'border-radius:6px;font-size:13px;';
+      input.addEventListener('input', function () {
+        var text = input.value.trim();
+        if (!text) {
+          filterRe = null;
+        } else {
+          try { filterRe = new RegExp(text, 'i'); } catch (err) { return; }
+        }
+        locked = null;
+        updateCounter();
+        apply(null);
+      });
+      bar.appendChild(input);
+    }
+
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'réinitialiser';
+    button.style.cssText = 'padding:5px 11px;border:1px solid #d1d5db;border-radius:6px;' +
+      'background:white;font:inherit;font-size:12.5px;color:#374151;cursor:pointer;';
+    button.addEventListener('click', reset);
+    bar.appendChild(button);
+
+    counter = document.createElement('span');
+    counter.style.cssText = 'color:#6b7280;font-size:12px;';
+    bar.appendChild(counter);
+    updateCounter();
+
+    gd.parentNode.insertBefore(bar, gd);
   }
 })();
 """

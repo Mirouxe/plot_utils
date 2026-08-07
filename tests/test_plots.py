@@ -172,6 +172,14 @@ def test_save_writes_a_self_contained_page(dataset, tmp_path):
     assert "plotly-graph-div" in content
     assert "plotly_hover" in content
     assert "filtrer" in content
+    assert "réinitialiser" in content
+
+
+def test_traces_carry_the_configuration_identity(dataset):
+    figure = dataset.grid(["temperature", "pression"])
+    configs = {trace.meta["config"] for trace in figure.data}
+    assert configs == set(dataset.configs)
+    assert all(trace.meta["label"] for trace in figure.data)
 
 
 def test_report_builds_tabs_for_every_section(dataset, tmp_path):

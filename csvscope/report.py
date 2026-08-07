@@ -85,10 +85,10 @@ $panes
 
 _HINT = (
     "<b>Interactions</b> : survole une courbe pour l'isoler du faisceau, clique pour la "
-    "verrouiller, double-clique pour tout rétablir. Le champ <code>filtrer</code> accepte une "
-    "expression régulière sur l'étiquette des configurations. La légende reste cliquable "
-    "(clic simple : masquer un groupe, double-clic : n'afficher que lui), et les axes des "
-    "coordonnées parallèles se filtrent en glissant la souris."
+    "verrouiller, puis <code>réinitialiser</code> pour tout rétablir. Le champ de filtrage "
+    "accepte une expression régulière sur l'étiquette des configurations. La légende reste "
+    "cliquable (clic simple : masquer un groupe, double-clic : n'afficher que lui), et les "
+    "axes des coordonnées parallèles se filtrent en glissant la souris."
 )
 
 
