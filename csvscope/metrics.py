@@ -27,6 +27,9 @@ MetricFunc = Callable[[pd.Series, pd.Series], float]
 METRICS: dict[str, MetricFunc] = {}
 METRIC_LABELS: dict[str, str] = {}
 
+# np.trapezoid remplace np.trapz depuis NumPy 2.
+_trapezoid = getattr(np, "trapezoid", None) or np.trapz
+
 
 def register_metric(name: str, label: str | None = None):
     """Décorateur enregistrant une métrique sous un nom utilisable partout."""
@@ -106,7 +109,7 @@ def _integral(values, time):
     if y.size < 2:
         return np.nan
     order = np.argsort(t)
-    return float(np.trapezoid(y[order], t[order]))
+    return float(_trapezoid(y[order], t[order]))
 
 
 @register_metric("t_max", "instant du maximum")
