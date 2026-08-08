@@ -629,6 +629,12 @@ class Dataset:
 
         return scatter(self, *args, **kwargs)
 
+    def pareto(self, *args, **kwargs):
+        """Front de Pareto entre deux critères (configurations non dominées)."""
+        from .plots import pareto
+
+        return pareto(self, *args, **kwargs)
+
     def report(self, *args, **kwargs):
         """Rapport HTML multi-onglets rassemblant plusieurs figures."""
         from .report import report

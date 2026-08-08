@@ -17,7 +17,6 @@ dependencies = [
 
 [project.optional-dependencies]
 images = ["kaleido>=0.2"]
-excel = ["openpyxl>=3.1"]
 dev = ["pytest>=7", "kaleido>=0.2"]
 
 [project.scripts]

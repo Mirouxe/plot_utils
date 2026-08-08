@@ -19,7 +19,7 @@ from .common import (
     subtitle_for,
 )
 
-__all__ = ["compare", "bars", "heatmap", "distribution", "scatter", "metrics_table"]
+__all__ = ["compare", "bars", "heatmap", "distribution", "scatter", "pareto", "metrics_table"]
 
 
 def _default_characteristic(dataset, exclude: Sequence[str] = ()) -> str:
@@ -162,7 +162,7 @@ def bars(
     quantity: str,
     metric: Any = "max",
     color: str | None = None,
-    top: int | None = None,
+    top: int | None = 20,
     ascending: bool = False,
     orientation: str = "h",
     title: str | None = None,
@@ -174,10 +174,14 @@ def bars(
 ) -> go.Figure:
     """Classement des configurations sur une métrique.
 
+    Seules les ``top`` premières sont affichées (20 par défaut) : un classement
+    de plusieurs centaines de barres n'apprend rien. ``top=None`` les garde toutes.
+
     >>> ds.bars("temperature", metric="max", color="materiau", top=15)
     """
     table = dataset.table(quantity, metric).reset_index()
     table = table.sort_values(quantity, ascending=ascending)
+    truncated = top is not None and len(table) > top
     if top:
         table = table.head(top)
     table = table.iloc[::-1] if orientation == "h" else table
@@ -222,11 +226,12 @@ def bars(
 
     computed_height = height or max(340, 26 * len(table) + 160)
 
+    hint = f"{len(table)} premières sur {len(dataset)}" if truncated else None
     return finalize(
         figure,
         dataset,
         title=title or f"Classement des configurations · {metric_label(metric)} de {quantity}",
-        subtitle=subtitle if subtitle is not None else subtitle_for(dataset),
+        subtitle=subtitle if subtitle is not None else subtitle_for(dataset, hint),
         height=computed_height,
         width=width,
         show_legend=False,
@@ -343,15 +348,18 @@ def distribution(
         hover = hover_head + f"<br><b>{metric_label(metric)} {quantity} = %{{x:.4g}}</b><extra></extra>"
 
         if kind in {"box", "violin"}:
+            # Au-delà de quelques dizaines de points par groupe, le nuage
+            # complet devient un trait plein : seuls les extrêmes restent utiles.
+            points_mode = "all" if len(subset) <= 40 else "outliers"
             if kind == "box":
                 trace_type: Any = go.Box
-                extra: dict[str, Any] = {"boxmean": True, "boxpoints": "all"}
+                extra: dict[str, Any] = {"boxmean": True, "boxpoints": points_mode}
             else:
                 trace_type = go.Violin
                 extra = {
                     "meanline": {"visible": True},
                     "box": {"visible": True},
-                    "points": "all",
+                    "points": points_mode,
                 }
             figure.add_trace(
                 trace_type(
@@ -446,6 +454,8 @@ def scatter(
     width: int | None = None,
     palette: Sequence[str] | None = None,
     trend: bool = False,
+    log_x: bool = False,
+    log_y: bool = False,
     interactivity: Mapping[str, Any] | bool | None = None,
 ) -> go.Figure:
     """Compromis entre deux grandeurs, une configuration par point.
@@ -455,17 +465,9 @@ def scatter(
 
     >>> ds.scatter(("temperature", "max"), ("rendement", "mean"), color="materiau")
     """
-    x_quantity, x_metric = resolve_metric_spec(x, metric)
-    y_quantity, y_metric = resolve_metric_spec(y, metric)
-
-    table = dataset.table([x_quantity], x_metric).reset_index()
-    y_table = dataset.table([y_quantity], y_metric).reset_index()[["config", y_quantity]]
-    if x_quantity == y_quantity:
-        y_table = y_table.rename(columns={y_quantity: f"{y_quantity}__y"})
-        y_column = f"{y_quantity}__y"
-    else:
-        y_column = y_quantity
-    table = table.merge(y_table, on="config")
+    table, x_quantity, x_metric, y_column, y_metric, y_quantity = _merge_metric_axes(
+        dataset, x, y, metric
+    )
 
     sizes = None
     if size is not None:
@@ -524,14 +526,180 @@ def scatter(
             )
         )
 
-    figure.update_xaxes(title_text=metric_axis_title(x_quantity, x_metric, dataset.units))
-    figure.update_yaxes(title_text=metric_axis_title(y_quantity, y_metric, dataset.units))
+    figure.update_xaxes(
+        title_text=metric_axis_title(x_quantity, x_metric, dataset.units),
+        type="log" if log_x else "linear",
+    )
+    figure.update_yaxes(
+        title_text=metric_axis_title(y_quantity, y_metric, dataset.units),
+        type="log" if log_y else "linear",
+    )
 
     return finalize(
         figure,
         dataset,
         title=title or f"{y_quantity} en fonction de {x_quantity} (par configuration)",
         subtitle=subtitle if subtitle is not None else subtitle_for(dataset),
+        legend_title=color or "série",
+        height=height,
+        width=width,
+        interactivity=interactivity if interactivity is not None else {"search": False},
+    )
+
+
+def _merge_metric_axes(
+    dataset, x: str | tuple[str, Any], y: str | tuple[str, Any], metric: Any
+) -> tuple[pd.DataFrame, str, Any, str, Any, str]:
+    """Table à deux colonnes de métriques, avec gestion du cas x == y."""
+    x_quantity, x_metric = resolve_metric_spec(x, metric)
+    y_quantity, y_metric = resolve_metric_spec(y, metric)
+
+    table = dataset.table([x_quantity], x_metric).reset_index()
+    y_table = dataset.table([y_quantity], y_metric).reset_index()[["config", y_quantity]]
+    if x_quantity == y_quantity:
+        y_table = y_table.rename(columns={y_quantity: f"{y_quantity}__y"})
+        y_column = f"{y_quantity}__y"
+    else:
+        y_column = y_quantity
+    table = table.merge(y_table, on="config")
+    return table, x_quantity, x_metric, y_column, y_metric, y_quantity
+
+
+def _pareto_front(
+    x_values: np.ndarray, y_values: np.ndarray, sense: tuple[str, str]
+) -> np.ndarray:
+    """Indices des points non dominés, triés le long du front."""
+    for direction in sense:
+        if direction not in {"min", "max"}:
+            raise ValueError("sense doit contenir 'min' ou 'max' pour chaque axe.")
+    tx = x_values if sense[0] == "min" else -x_values
+    ty = y_values if sense[1] == "min" else -y_values
+
+    order = np.lexsort((ty, tx))
+    front: list[int] = []
+    best = np.inf
+    for index in order:
+        if ty[index] < best:
+            front.append(int(index))
+            best = ty[index]
+    return np.asarray(front, dtype=int)
+
+
+def pareto(
+    dataset,
+    x: str | tuple[str, Any],
+    y: str | tuple[str, Any],
+    sense: tuple[str, str] = ("min", "max"),
+    metric: Any = "max",
+    color: str | None = None,
+    title: str | None = None,
+    subtitle: str | None = None,
+    height: int | None = 560,
+    width: int | None = None,
+    palette: Sequence[str] | None = None,
+    log_x: bool = False,
+    log_y: bool = False,
+    interactivity: Mapping[str, Any] | bool | None = None,
+) -> go.Figure:
+    """Front de Pareto entre deux critères : les compromis qu'aucune autre
+    configuration ne bat sur les deux axes à la fois.
+
+    C'est la vue à ouvrir quand aucun critère unique ne s'impose : le front
+    réduit des centaines de configurations aux seules candidates rationnelles.
+
+    Args:
+        x, y: ``"grandeur"`` ou ``("grandeur", "métrique")``.
+        sense: sens d'optimisation de chaque axe, ``"min"`` ou ``"max"``.
+
+    >>> ds.pareto(("temperature", "max"), ("rendement", "mean"), sense=("min", "max"))
+    """
+    table, x_quantity, x_metric, y_column, y_metric, y_quantity = _merge_metric_axes(
+        dataset, x, y, metric
+    )
+    x_values = table[x_quantity].to_numpy(dtype=float)
+    y_values = table[y_column].to_numpy(dtype=float)
+    front = _pareto_front(x_values, y_values, sense)
+    on_front = np.zeros(len(table), dtype=bool)
+    on_front[front] = True
+
+    groups = dataset.values(color) if color else ["ensemble"]
+    encoder = ColorEncoder(groups, palette=palette)
+    figure = go.Figure()
+
+    for value in groups:
+        mask = np.ones(len(table), dtype=bool) if color is None else (table[color] == value).to_numpy()
+        subset = table[mask & ~on_front]
+        if subset.empty:
+            continue
+        point_color = encoder.color(value)
+        label = format_number(value) if color else "configurations dominées"
+        customdata, hover_head = _hover_customdata(subset, dataset)
+        figure.add_trace(
+            go.Scatter(
+                x=subset[x_quantity],
+                y=subset[y_column],
+                mode="markers",
+                marker={"size": 8, "color": point_color, "opacity": 0.45,
+                        "line": {"color": "white", "width": 1}},
+                name=label,
+                legendgroup=str(value),
+                meta={"label": label},
+                customdata=customdata,
+                hovertemplate=(
+                    hover_head
+                    + f"<br>{metric_label(x_metric)} {x_quantity} = %{{x:.4g}}"
+                    + f"<br>{metric_label(y_metric)} {y_quantity} = %{{y:.4g}}"
+                    + "<extra>dominée</extra>"
+                ),
+            )
+        )
+
+    front_table = table.iloc[front]
+    front_colors = [
+        encoder.color(front_table[color].iloc[i] if color else "ensemble")
+        for i in range(len(front_table))
+    ]
+    customdata, hover_head = _hover_customdata(front_table, dataset)
+    arrow = {"min": "↓", "max": "↑"}
+    figure.add_trace(
+        go.Scatter(
+            x=front_table[x_quantity],
+            y=front_table[y_column],
+            mode="lines+markers",
+            line={"color": "#22252a", "width": 1.6, "dash": "dot"},
+            marker={"size": 13, "color": front_colors,
+                    "line": {"color": "#22252a", "width": 2}, "symbol": "diamond"},
+            name=f"front de Pareto · {len(front_table)} config.",
+            meta={"label": "front de Pareto"},
+            customdata=customdata,
+            hovertemplate=(
+                "<b>★ front de Pareto</b><br>"
+                + hover_head
+                + f"<br>{metric_label(x_metric)} {x_quantity} = %{{x:.4g}}"
+                + f"<br>{metric_label(y_metric)} {y_quantity} = %{{y:.4g}}"
+                + "<extra></extra>"
+            ),
+        )
+    )
+
+    figure.update_xaxes(
+        title_text=f"{arrow[sense[0]]} " + metric_axis_title(x_quantity, x_metric, dataset.units),
+        type="log" if log_x else "linear",
+    )
+    figure.update_yaxes(
+        title_text=f"{arrow[sense[1]]} " + metric_axis_title(y_quantity, y_metric, dataset.units),
+        type="log" if log_y else "linear",
+    )
+
+    direction = (
+        f"{'minimiser' if sense[0] == 'min' else 'maximiser'} {x_quantity}, "
+        f"{'minimiser' if sense[1] == 'min' else 'maximiser'} {y_quantity}"
+    )
+    return finalize(
+        figure,
+        dataset,
+        title=title or f"Front de Pareto : {y_quantity} contre {x_quantity}",
+        subtitle=subtitle if subtitle is not None else subtitle_for(dataset, direction),
         legend_title=color or "série",
         height=height,
         width=width,
@@ -575,6 +743,9 @@ def metrics_table(
                 break
         headers.append(f"<b>{column}</b>")
 
+    # Au-delà de ~30 lignes, le tableau garde une hauteur fixe et défile.
+    computed_height = height or min(max(300, 26 * len(table) + 140), 920)
+
     figure = go.Figure(
         go.Table(
             columnwidth=[2.2] + [1] * (len(columns) - 1),
@@ -602,7 +773,7 @@ def metrics_table(
         dataset,
         title=title or "Récapitulatif par configuration",
         subtitle=subtitle_for(dataset, f"métriques : {metric_names}"),
-        height=height or max(300, 26 * len(table) + 140),
+        height=computed_height,
         width=width,
         show_legend=False,
         interactivity=False,

@@ -59,10 +59,15 @@ _JS = r"""
   var filterRe = null;
   var input = null;
   var counter = null;
+  var shown;
 
   function kept(index) { return filterRe === null || filterRe.test(searchable[index]); }
 
-  function apply(focus) {
+  function apply(focus, force) {
+    // Se déplacer le long d'une même courbe ne doit pas redessiner la figure :
+    // avec des centaines de traces, chaque restyle coûte cher.
+    if (!force && focus === shown) { return; }
+    shown = focus;
     var opacity = [], width = [], hover = [];
     for (var i = 0; i < targets.length; i++) {
       if (!kept(i)) {
@@ -96,7 +101,7 @@ _JS = r"""
     filterRe = null;
     if (input) { input.value = ''; }
     updateCounter();
-    apply(null);
+    apply(null, true);
   }
 
   function keyAt(event) {
@@ -142,7 +147,7 @@ _JS = r"""
         }
         locked = null;
         updateCounter();
-        apply(null);
+        apply(null, true);
       });
       bar.appendChild(input);
     }

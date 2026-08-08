@@ -146,6 +146,7 @@ def radar(
         raise ValueError("Un radar demande au moins trois grandeurs.")
 
     table = dataset.table(quantities, metric)
+    truncated = False
 
     if group is not None:
         grouped = table.groupby(group, dropna=False)[list(quantities)]
@@ -157,7 +158,8 @@ def radar(
         raw = table[list(quantities)]
         names = table["label"].tolist()
         counts = [1] * len(raw)
-        if len(raw) > max_traces:
+        truncated = len(raw) > max_traces
+        if truncated:
             raw = raw.head(max_traces)
             names = names[:max_traces]
             counts = counts[:max_traces]
@@ -229,6 +231,8 @@ def radar(
         }
     )
 
+    if group is None and truncated:
+        hint += f" · {max_traces} premières configurations (utilise group=… ou filter)"
     return finalize(
         figure,
         dataset,

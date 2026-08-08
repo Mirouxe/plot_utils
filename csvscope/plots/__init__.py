@@ -2,7 +2,15 @@
 
 from .curves import curves, envelope, explorer, grid, small_multiples
 from .multivariate import parallel, radar
-from .summary import bars, compare, distribution, heatmap, metrics_table, scatter
+from .summary import (
+    bars,
+    compare,
+    distribution,
+    heatmap,
+    metrics_table,
+    pareto,
+    scatter,
+)
 
 __all__ = [
     "curves",
@@ -15,6 +23,7 @@ __all__ = [
     "heatmap",
     "distribution",
     "scatter",
+    "pareto",
     "metrics_table",
     "parallel",
     "radar",

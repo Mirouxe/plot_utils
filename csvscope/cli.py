@@ -29,6 +29,7 @@ FIGURE_TYPES = {
     "heatmap": plots.heatmap,
     "distribution": plots.distribution,
     "scatter": plots.scatter,
+    "pareto": plots.pareto,
     "parallel": plots.parallel,
     "radar": plots.radar,
     "metrics_table": plots.metrics_table,
@@ -134,7 +135,7 @@ def _figure_arguments(args: argparse.Namespace, dataset) -> dict:
         return {"quantity": y, "metric": args.metrique, "color": args.couleur}
     if name == "distribution":
         return {"quantity": y, "metric": args.metrique, "by": args.couleur}
-    if name == "scatter":
+    if name in {"scatter", "pareto"}:
         return {"x": y, "y": quantities[1] if len(quantities) > 1 else y,
                 "metric": args.metrique, "color": args.couleur}
     raise ValueError(f"Type de figure non géré : {name}")

@@ -9,7 +9,12 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from ..theme import ColorEncoder, axis_title
+from ..theme import (
+    ColorEncoder,
+    adaptive_line_style,
+    adaptive_max_points,
+    axis_title,
+)
 from .common import (
     TraceStyler,
     curve_title,
@@ -30,12 +35,43 @@ SPIKE_STYLE = {
     "spikecolor": "#9ca3af",
 }
 
+#: Au-delà de ce volume total de points, le rendu SVG devient poussif : WebGL.
+WEBGL_THRESHOLD = 60_000
+
 
 def _thin(frame: pd.DataFrame, max_points: int | None) -> pd.DataFrame:
     if max_points is None or len(frame) <= max_points:
         return frame
     step = int(np.ceil(len(frame) / max_points))
     return frame.iloc[::step]
+
+
+def _scatter_class(render: str, total_points: int):
+    """Choisit le moteur de rendu des traces (SVG précis ou WebGL rapide)."""
+    if render == "webgl":
+        return go.Scattergl
+    if render == "svg":
+        return go.Scatter
+    if render != "auto":
+        raise ValueError("render doit valoir 'auto', 'svg' ou 'webgl'.")
+    return go.Scattergl if total_points > WEBGL_THRESHOLD else go.Scatter
+
+
+def _resolve_line_style(
+    dataset, opacity: float | None, line_width: float | None, max_points: int | None
+) -> tuple[float, float, int]:
+    auto = adaptive_line_style(len(dataset))
+    return (
+        auto["opacity"] if opacity is None else opacity,
+        auto["width"] if line_width is None else line_width,
+        adaptive_max_points(len(dataset)) if max_points is None else max_points,
+    )
+
+
+def _total_points(dataset, quantity_count: int, max_points: int) -> int:
+    return quantity_count * sum(
+        min(len(frame), max_points) for frame in dataset.frames.values()
+    )
 
 
 def _hover_template(dataset, config: str, x_name: str, y_name: str) -> str:
@@ -59,17 +95,24 @@ def curves(
     subtitle: str | None = None,
     height: int | None = 560,
     width: int | None = None,
-    line_width: float = 1.9,
-    opacity: float = 0.9,
+    line_width: float | None = None,
+    opacity: float | None = None,
     markers: bool = False,
     log_y: bool = False,
     log_x: bool = False,
     palette: Sequence[str] | None = None,
-    max_points: int | None = 4000,
+    max_points: int | None = None,
+    render: str = "auto",
     interactivity: Mapping[str, Any] | bool | None = None,
     spikes: bool = True,
 ) -> go.Figure:
     """Superpose une grandeur pour toutes les configurations du jeu.
+
+    Les réglages s'adaptent au volume : opacité et épaisseur diminuent avec le
+    nombre de configurations, le sous-échantillonnage respecte un budget global
+    de points, et le rendu bascule en WebGL au-delà de quelques dizaines de
+    milliers de points. La légende par configuration disparaît quand elle
+    deviendrait plus longue que le graphique : le survol prend le relais.
 
     Args:
         quantity: grandeur en ordonnée.
@@ -77,20 +120,26 @@ def curves(
             (diagramme de phase, courbe débit/pression, etc.).
         color: caractéristique portant la couleur (légende regroupée cliquable).
         dash: seconde caractéristique portant le style de trait.
+        render: ``"auto"`` (défaut), ``"svg"`` ou ``"webgl"``.
 
     >>> ds.curves("temperature", color="maillage", dash="materiau")
     """
     x = x or dataset.time
     styler = TraceStyler(dataset, color=color, dash=dash, palette=palette)
+    opacity, line_width, max_points = _resolve_line_style(
+        dataset, opacity, line_width, max_points
+    )
+    trace_class = _scatter_class(render, _total_points(dataset, 1, max_points))
+    hide_config_legend = color is None and dash is None and len(dataset) > 20
     figure = go.Figure()
 
     for config in dataset.configs:
         frame = _thin(dataset.frames[config], max_points)
         if quantity not in frame.columns or x not in frame.columns:
             continue
-        style = styler.style(config)
+        style = styler.style(config, force_hidden_legend=hide_config_legend)
         figure.add_trace(
-            go.Scatter(
+            trace_class(
                 x=frame[x],
                 y=frame[quantity],
                 mode="lines+markers" if markers else "lines",
@@ -108,16 +157,18 @@ def curves(
     figure.update_xaxes(type="log" if log_x else "linear", **(SPIKE_STYLE if spikes else {}))
     figure.update_yaxes(type="log" if log_y else "linear")
 
+    hint = "survole une courbe pour l'identifier" if hide_config_legend else None
     return finalize(
         figure,
         dataset,
         title=title or curve_title(dataset, quantity, x),
-        subtitle=subtitle if subtitle is not None else subtitle_for(dataset),
+        subtitle=subtitle if subtitle is not None else subtitle_for(dataset, hint),
         x_title=x,
         y_title=quantity,
         legend_title=styler.legend_title,
         height=height,
         width=width,
+        show_legend=not hide_config_legend,
         interactivity=interactivity,
     )
 
@@ -133,24 +184,33 @@ def grid(
     subtitle: str | None = None,
     row_height: int = 240,
     width: int | None = None,
-    line_width: float = 1.7,
-    opacity: float = 0.9,
+    line_width: float | None = None,
+    opacity: float | None = None,
     shared_x: bool = True,
     unified_hover: bool = False,
     palette: Sequence[str] | None = None,
-    max_points: int | None = 3000,
+    max_points: int | None = None,
+    render: str = "auto",
     interactivity: Mapping[str, Any] | bool | None = None,
 ) -> go.Figure:
     """Trace plusieurs grandeurs en sous-graphiques alignés sur le même axe des temps.
 
     C'est la vue « planche de bord » : on lit d'un coup l'évolution de toutes les
-    grandeurs d'un même lot de configurations, avec un zoom synchronisé.
+    grandeurs d'un même lot de configurations, avec un zoom synchronisé. Survoler
+    une courbe met en évidence la même configuration dans tous les sous-graphiques.
 
     >>> ds.grid(["temperature", "pression", "debit"], color="maillage")
     """
     quantities = resolve_quantities(dataset, quantities)
     x = x or dataset.time
     nrows = int(np.ceil(len(quantities) / ncols))
+    opacity, line_width, max_points = _resolve_line_style(
+        dataset, opacity, line_width, max_points
+    )
+    max_points = max(150, max_points // max(len(quantities), 1))
+    trace_class = _scatter_class(
+        render, _total_points(dataset, len(quantities), max_points)
+    )
 
     figure = make_subplots(
         rows=nrows,
@@ -162,6 +222,7 @@ def grid(
     )
 
     styler = TraceStyler(dataset, color=color, dash=dash, palette=palette)
+    hide_config_legend = color is None and dash is None and len(dataset) > 20
 
     for index, quantity in enumerate(quantities):
         row, col = index // ncols + 1, index % ncols + 1
@@ -169,9 +230,11 @@ def grid(
             frame = _thin(dataset.frames[config], max_points)
             if quantity not in frame.columns:
                 continue
-            style = styler.style(config, force_hidden_legend=index > 0)
+            style = styler.style(
+                config, force_hidden_legend=index > 0 or hide_config_legend
+            )
             figure.add_trace(
-                go.Scatter(
+                trace_class(
                     x=frame[x],
                     y=frame[quantity],
                     mode="lines",
@@ -193,15 +256,17 @@ def grid(
     figure.update_annotations(font={"size": 13, "color": "#374151"})
     figure.update_xaxes(**SPIKE_STYLE)
 
+    hint = "survole une courbe pour l'identifier" if hide_config_legend else None
     return finalize(
         figure,
         dataset,
         title=title or "Vue d'ensemble des grandeurs",
-        subtitle=subtitle if subtitle is not None else subtitle_for(dataset),
+        subtitle=subtitle if subtitle is not None else subtitle_for(dataset, hint),
         legend_title=styler.legend_title,
         height=max(320, row_height * nrows + 120),
         width=width,
         hovermode="x unified" if unified_hover else "closest",
+        show_legend=not hide_config_legend,
         interactivity=interactivity,
     )
 
@@ -217,10 +282,11 @@ def explorer(
     subtitle: str | None = None,
     height: int | None = 620,
     width: int | None = None,
-    line_width: float = 1.9,
-    opacity: float = 0.9,
+    line_width: float | None = None,
+    opacity: float | None = None,
     palette: Sequence[str] | None = None,
-    max_points: int | None = 3000,
+    max_points: int | None = None,
+    render: str = "auto",
     interactivity: Mapping[str, Any] | bool | None = None,
 ) -> go.Figure:
     """Graphique unique doté de menus pour changer de grandeur et de regroupement.
@@ -236,6 +302,14 @@ def explorer(
     if color is None and color_options:
         color = color_options[0]
 
+    opacity, line_width, max_points = _resolve_line_style(
+        dataset, opacity, line_width, max_points
+    )
+    # Toutes les grandeurs cohabitent dans la figure : budget par grandeur.
+    max_points = max(150, max_points // max(len(quantities), 1))
+    trace_class = _scatter_class(
+        render, _total_points(dataset, len(quantities), max_points)
+    )
     figure = go.Figure()
     configs = dataset.configs
 
@@ -245,7 +319,7 @@ def explorer(
             frame = _thin(dataset.frames[config], max_points)
             style = styler.style(config)
             figure.add_trace(
-                go.Scatter(
+                trace_class(
                     x=frame[x] if x in frame.columns else [],
                     y=frame[quantity] if quantity in frame.columns else [],
                     mode="lines",
@@ -383,7 +457,9 @@ def envelope(
     dataset,
     quantity: str,
     by: str | None = None,
-    band: str = "minmax",
+    band: str = "quantiles",
+    quantiles: tuple[float, float] = (0.1, 0.9),
+    center: str = "median",
     x: str | None = None,
     points: int = 300,
     show_individual: bool = False,
@@ -394,17 +470,23 @@ def envelope(
     palette: Sequence[str] | None = None,
     interactivity: Mapping[str, Any] | bool | None = None,
 ) -> go.Figure:
-    """Faisceau (min/max ou ±1σ) et courbe moyenne par groupe de configurations.
+    """Courbe centrale et bande de dispersion par groupe de configurations.
 
-    Quand le nombre de configurations rend la superposition illisible, cette vue
-    montre la tendance de chaque groupe et sa dispersion.
+    C'est la vue de synthèse quand la superposition brute devient illisible : la
+    tendance de chaque groupe, et l'étendue du faisceau autour d'elle. La bande
+    par quantiles (défaut) reste lisible même quand quelques configurations
+    extrêmes écraseraient une enveloppe min–max.
 
     Args:
         by: caractéristique définissant les groupes ; sans elle, un seul faisceau.
-        band: ``"minmax"`` (enveloppe complète) ou ``"std"`` (±1 écart-type).
+        band: ``"quantiles"`` (défaut), ``"minmax"`` ou ``"std"`` (±1 écart-type).
+        quantiles: bornes de la bande quand ``band="quantiles"``.
+        center: ``"median"`` (défaut) ou ``"mean"``.
     """
-    if band not in {"minmax", "std"}:
-        raise ValueError("band doit valoir 'minmax' ou 'std'.")
+    if band not in {"quantiles", "minmax", "std"}:
+        raise ValueError("band doit valoir 'quantiles', 'minmax' ou 'std'.")
+    if center not in {"median", "mean"}:
+        raise ValueError("center doit valoir 'median' ou 'mean'.")
 
     x = x or dataset.time
     resampled = dataset.resample(points) if x == dataset.time else dataset
@@ -419,6 +501,13 @@ def envelope(
         }
 
     encoder = ColorEncoder(list(groups), palette=palette)
+    center_label = "médiane" if center == "median" else "moyenne"
+    if band == "quantiles":
+        band_label = f"P{quantiles[0] * 100:g}–P{quantiles[1] * 100:g}"
+    elif band == "minmax":
+        band_label = "min–max"
+    else:
+        band_label = "±1σ"
     figure = go.Figure()
 
     for value, configs in groups.items():
@@ -430,17 +519,18 @@ def envelope(
                 for c in configs
             ]
         )
-        mean = np.nanmean(stacked, axis=0)
-        if band == "minmax":
+        middle = np.nanmedian(stacked, axis=0) if center == "median" else np.nanmean(stacked, axis=0)
+        if band == "quantiles":
+            low = np.nanquantile(stacked, quantiles[0], axis=0)
+            high = np.nanquantile(stacked, quantiles[1], axis=0)
+        elif band == "minmax":
             low, high = np.nanmin(stacked, axis=0), np.nanmax(stacked, axis=0)
-            band_label = "min–max"
         else:
+            mean = np.nanmean(stacked, axis=0)
             spread = np.nanstd(stacked, axis=0, ddof=1) if len(configs) > 1 else np.zeros_like(mean)
             low, high = mean - spread, mean + spread
-            band_label = "moyenne ± 1σ"
 
         color = encoder.color(value)
-        fill = _to_rgba(color, 0.18)
         label = format_number(value) if by else str(value)
         described = f"{by} = {label}" if by else label
 
@@ -449,7 +539,7 @@ def envelope(
                 x=np.concatenate([axis, axis[::-1]]),
                 y=np.concatenate([high, low[::-1]]),
                 fill="toself",
-                fillcolor=fill,
+                fillcolor=_to_rgba(color, 0.16),
                 line={"color": "rgba(0,0,0,0)"},
                 hoverinfo="skip",
                 name=f"{label} ({band_label})",
@@ -460,20 +550,21 @@ def envelope(
         figure.add_trace(
             go.Scatter(
                 x=axis,
-                y=mean,
+                y=middle,
                 mode="lines",
                 line={"color": color, "width": 2.6},
                 name=f"{label} · {len(configs)} config.",
                 legendgroup=label,
                 meta={"label": label},
                 hovertemplate=(
-                    f"<b>{described}</b><br>{len(configs)} configurations<br>"
-                    f"{x} = %{{x:.4g}}<br>moyenne {quantity} = %{{y:.4g}}<extra></extra>"
+                    f"<b>{described}</b><br>{len(configs)} configurations · bande {band_label}<br>"
+                    f"{x} = %{{x:.4g}}<br>{center_label} {quantity} = %{{y:.4g}}<extra></extra>"
                 ),
             )
         )
 
         if show_individual:
+            style = adaptive_line_style(len(resampled))
             for config in configs:
                 frame = resampled.frames[config]
                 figure.add_trace(
@@ -481,8 +572,8 @@ def envelope(
                         x=frame[x],
                         y=frame[quantity],
                         mode="lines",
-                        line={"color": color, "width": 0.9},
-                        opacity=0.35,
+                        line={"color": color, "width": 0.8},
+                        opacity=min(0.35, style["opacity"]),
                         showlegend=False,
                         legendgroup=label,
                         meta={"label": resampled.label(config)},
@@ -495,9 +586,9 @@ def envelope(
     return finalize(
         figure,
         dataset,
-        title=title or f"Dispersion de {quantity}"
-        + (f" par {by}" if by else ""),
-        subtitle=subtitle if subtitle is not None else subtitle_for(dataset),
+        title=title or f"Dispersion de {quantity}" + (f" par {by}" if by else ""),
+        subtitle=subtitle if subtitle is not None
+        else subtitle_for(dataset, f"{center_label} et bande {band_label}"),
         x_title=x,
         y_title=quantity,
         legend_title=by or "groupe",
@@ -519,10 +610,11 @@ def small_multiples(
     row_height: int = 250,
     width: int | None = None,
     shared_y: bool = True,
-    line_width: float = 1.7,
-    opacity: float = 0.95,
+    line_width: float | None = None,
+    opacity: float | None = None,
     palette: Sequence[str] | None = None,
-    max_points: int | None = 2000,
+    max_points: int | None = None,
+    render: str = "auto",
     interactivity: Mapping[str, Any] | bool | None = None,
 ) -> go.Figure:
     """Une facette par valeur d'une caractéristique, pour isoler son effet.
@@ -533,6 +625,10 @@ def small_multiples(
     values = dataset.values(facet)
     ncols = min(ncols, max(len(values), 1))
     nrows = int(np.ceil(len(values) / ncols))
+    opacity, line_width, max_points = _resolve_line_style(
+        dataset, opacity, line_width, max_points
+    )
+    trace_class = _scatter_class(render, _total_points(dataset, 1, max_points))
 
     figure = make_subplots(
         rows=nrows,
@@ -553,7 +649,7 @@ def small_multiples(
             frame = _thin(dataset.frames[config], max_points)
             style = styler.style(config, force_hidden_legend=index > 0)
             figure.add_trace(
-                go.Scatter(
+                trace_class(
                     x=frame[x],
                     y=frame[quantity],
                     mode="lines",

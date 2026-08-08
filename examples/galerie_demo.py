@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Démonstration complète de csvscope sur des données artificielles.
+"""Démonstration complète de csvscope sur une campagne artificielle de 288 configurations.
 
 Le script :
 
-1. écrit une campagne de CSV artificiels (une configuration par fichier, ses
-   caractéristiques dans le nom du fichier) ;
-2. la recharge avec csvscope ;
+1. écrit 288 CSV artificiels (une configuration par fichier, ses caractéristiques
+   dans le nom du fichier : 3 matériaux × 2 maillages × 8 puissances × 6 débits) ;
+2. les recharge avec csvscope ;
 3. construit toute la galerie de graphiques interactifs ;
 4. écrit un rapport HTML à onglets, et éventuellement les captures PNG.
 
@@ -24,14 +24,21 @@ import csvscope as cs
 
 RACINE = Path(__file__).resolve().parent
 
+MATERIAUX = ("alu", "cuivre", "composite")
+MAILLAGES = ("moyen", "fin")
+PUISSANCES = (5, 8, 12, 16, 20, 25, 30, 35)
+DEBITS = (0.4, 0.8, 1.2, 1.6, 2.0, 2.4)
+
 
 def construire_figures(ds: cs.Dataset) -> dict[str, object]:
     """Une entrée par figure : le nom servira de nom de fichier."""
     return {
-        # Toutes les configurations superposées : couleur = puissance, trait = matériau.
-        "01_courbes": ds.curves("temperature", color="puissance", dash="materiau"),
+        # 288 courbes superposées : opacité, épaisseur et rendu (WebGL) s'adaptent
+        # seuls au volume ; la couleur ordonnée porte la puissance.
+        "01_courbes": ds.curves("temperature", color="puissance"),
 
-        # Plusieurs grandeurs, axes des temps synchronisés.
+        # Plusieurs grandeurs, axes des temps synchronisés ; survoler une courbe
+        # met en évidence la même configuration dans tous les sous-graphiques.
         "02_grille": ds.grid(
             ["temperature", "contrainte", "rendement", "vibration"], color="puissance"
         ),
@@ -39,8 +46,8 @@ def construire_figures(ds: cs.Dataset) -> dict[str, object]:
         # Une seule figure, deux menus : grandeur affichée et caractéristique en couleur.
         "03_explorateur": ds.explorer(color="materiau"),
 
-        # Faisceau min–max et courbe moyenne par matériau.
-        "04_faisceau": ds.envelope("temperature", by="materiau", show_individual=True),
+        # Médiane et bande P10–P90 par matériau : la vue de synthèse à ce volume.
+        "04_faisceau": ds.envelope("temperature", by="materiau"),
 
         # Une facette par matériau pour isoler son effet.
         "05_facettes": ds.small_multiples(
@@ -52,11 +59,11 @@ def construire_figures(ds: cs.Dataset) -> dict[str, object]:
             "temperature", metric="max", x="puissance", color="materiau"
         ),
 
-        # Classement des configurations les plus chaudes.
-        "07_classement": ds.bars("temperature", metric="max", color="materiau", top=15),
+        # Les 20 configurations les plus chaudes (sur 288).
+        "07_classement": ds.bars("temperature", metric="max", color="materiau"),
 
         # Carte du croisement de deux caractéristiques.
-        "08_carte": ds.heatmap("temperature", x="puissance", y="materiau", metric="max"),
+        "08_carte": ds.heatmap("temperature", x="puissance", y="debit", metric="max"),
 
         # Dispersion des maxima par matériau.
         "09_distribution": ds.distribution(
@@ -66,29 +73,38 @@ def construire_figures(ds: cs.Dataset) -> dict[str, object]:
         # Compromis entre deux grandeurs, un point par configuration.
         "10_compromis": ds.scatter(
             ("temperature", "max"),
-            ("rendement", "mean"),
+            ("vibration", "rms"),
             color="materiau",
             size="contrainte",
-            trend=True,
+        ),
+
+        # Front de Pareto à puissance fixée : refroidir coûte du pompage ; le front
+        # isole les seules configurations qu'aucune autre ne bat sur les deux axes.
+        "11_pareto": ds.filter(puissance=20).pareto(
+            ("temperature", "max"),
+            ("pompage", "mean"),
+            sense=("min", "min"),
+            color="materiau",
+            log_y=True,
         ),
 
         # Filtrage multi-critères en glissant la souris sur les axes.
-        "11_coordonnees_paralleles": ds.parallel(
+        "12_coordonnees_paralleles": ds.parallel(
             ["temperature", "contrainte", "vibration", "rendement"],
             metric="max",
             color="puissance",
         ),
 
         # Signature globale de chaque matériau.
-        "12_radar": ds.radar(
+        "13_radar": ds.radar(
             ["temperature", "pression", "contrainte", "vibration", "rendement"],
             metric="max",
             group="materiau",
             normalize="minmax",
         ),
 
-        # Tableau récapitulatif trié.
-        "13_recapitulatif": cs.metrics_table(
+        # Tableau récapitulatif (hauteur fixe, contenu défilant).
+        "14_recapitulatif": cs.metrics_table(
             ds, ["temperature", "contrainte", "rendement"], metrics=("max", "mean")
         ),
     }
@@ -111,20 +127,21 @@ def main() -> int:
     sortie = Path(args.sortie)
     sortie.mkdir(parents=True, exist_ok=True)
 
-    # 1. Données artificielles : 48 configurations, noms de fichiers du style
-    #    cas_materiau=alu_maillage=fin_puissance=20_debit=1p5.csv
-    fichiers = cs.write_campaign(args.dossier, points=args.points)
+    # 1. Données artificielles : 288 configurations, noms de fichiers du style
+    #    cas_materiau=alu_maillage=fin_puissance=20_debit=1p6.csv
+    fichiers = cs.write_campaign(
+        args.dossier,
+        materiaux=MATERIAUX,
+        maillages=MAILLAGES,
+        puissances=PUISSANCES,
+        debits=DEBITS,
+        points=args.points,
+    )
     print(f"{len(fichiers)} fichiers CSV écrits dans {args.dossier}")
 
     # 2. Chargement : les caractéristiques sont lues dans les noms de fichiers.
     ds = cs.load(args.dossier, label="{materiau} · {puissance} kW · {debit} kg/s")
     print(ds.overview())
-
-    # Grandeur dérivée, calculée à la volée pour toutes les configurations.
-    ds = ds.derive(
-        marge_thermique="180 - temperature",
-        units={"marge_thermique": "°C"},
-    )
 
     # 3. Galerie.
     figures = construire_figures(ds)
@@ -138,15 +155,15 @@ def main() -> int:
         quantities=["temperature", "contrainte", "rendement", "vibration"],
         x="puissance",
         color="materiau",
-        title="Campagne de refroidissement — 48 configurations",
+        title="Campagne de refroidissement — 288 configurations",
     )
     print(f"Rapport : {rapport}")
 
-    # Exemple de sélection : on ne garde qu'un sous-ensemble de configurations.
-    fort = ds.filter(puissance=[20, 35], debit=lambda valeur: valeur > 1.0)
+    # Exemple de sélection : tous les graphiques acceptent un jeu filtré.
+    fort = ds.filter(puissance=lambda p: p >= 25, debit=lambda q: q >= 1.6)
     cs.save(
         fort.curves("contrainte", color="materiau"),
-        sortie / "14_selection_forte_puissance.html",
+        sortie / "15_selection_forte_puissance.html",
     )
     print(f"Sélection : {len(fort)} configurations sur {len(ds)}")
 
@@ -154,7 +171,7 @@ def main() -> int:
         dossier_png = Path(args.png_dossier)
         dossier_png.mkdir(parents=True, exist_ok=True)
         for nom, figure in figures.items():
-            largeur = 900 if nom == "12_radar" else 1150
+            largeur = 900 if "radar" in nom else 1150
             hauteur = min(int(figure.layout.height or 560), 1000)
             figure.write_image(dossier_png / f"{nom}.png", width=largeur, height=hauteur)
         print(f"Captures PNG dans {dossier_png}")

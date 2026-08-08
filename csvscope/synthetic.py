@@ -103,6 +103,15 @@ def generate_series(
         + rng.normal(0.0, 0.02 * mesh["bruit"], points)
     )
 
+    # Coût du refroidissement : la perte de charge croît vite avec le débit,
+    # si bien que baisser la température se paie en puissance de pompage.
+    # C'est l'objectif antagoniste qui rend les compromis non triviaux.
+    pumping = (
+        95.0 * debit**2.8 * (1 + 0.05 * np.sin(2 * np.pi * time / 41.0))
+        + 0.04 * (temperature - AMBIENT)
+        + rng.normal(0.0, 1.2 * mesh["bruit"], points)
+    )
+
     return pd.DataFrame(
         {
             "temps [s]": np.round(time, 4),
@@ -112,6 +121,7 @@ def generate_series(
             "contrainte [MPa]": np.round(stress, 3),
             "rendement [%]": np.round(efficiency, 3),
             "vibration [mm/s]": np.round(vibration, 4),
+            "pompage [W]": np.round(pumping, 3),
         }
     )
 

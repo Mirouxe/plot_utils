@@ -24,6 +24,8 @@ __all__ = [
     "sort_values_naturally",
     "axis_title",
     "layout_title",
+    "adaptive_line_style",
+    "adaptive_max_points",
 ]
 
 TEMPLATE_NAME = "csvscope"
@@ -211,6 +213,28 @@ class StyleEncoder:
         if value not in self.order:
             self.order = sort_values_naturally([*self.order, value])
         return self.styles[self.order.index(value) % len(self.styles)]
+
+
+def adaptive_line_style(n_configs: int) -> dict[str, float]:
+    """Opacité et épaisseur de trait adaptées au nombre de courbes superposées.
+
+    Dix courbes se lisent trace par trace ; trois cents se lisent comme une
+    densité, où la courbe survolée reprend le premier plan.
+    """
+    if n_configs <= 12:
+        return {"opacity": 0.95, "width": 2.2}
+    if n_configs <= 40:
+        return {"opacity": 0.85, "width": 1.8}
+    if n_configs <= 120:
+        return {"opacity": 0.55, "width": 1.4}
+    if n_configs <= 300:
+        return {"opacity": 0.35, "width": 1.1}
+    return {"opacity": 0.22, "width": 1.0}
+
+
+def adaptive_max_points(n_configs: int, budget: int = 160_000) -> int:
+    """Nombre de points conservés par courbe pour rester fluide au total."""
+    return int(min(4000, max(200, budget / max(n_configs, 1))))
 
 
 def axis_title(name: str, units: Mapping[str, str] | None = None) -> str:

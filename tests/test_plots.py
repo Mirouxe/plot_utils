@@ -1,8 +1,21 @@
+import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 import pytest
 
 import csvscope as cs
 from csvscope import interactive
+
+
+def _many_configs(count: int, points: int = 500) -> cs.Dataset:
+    """Jeu volumineux en mémoire, pour tester les comportements adaptatifs."""
+    time = np.linspace(0, 10, points)
+    frames = {
+        f"cas_{index:03d}": pd.DataFrame({"time": time, "y": np.sin(time) + index})
+        for index in range(count)
+    }
+    meta = {name: {"indice": index} for index, name in enumerate(frames)}
+    return cs.load_frames(frames, meta, time="time")
 
 
 def test_curves_has_one_trace_per_configuration(dataset):
@@ -45,9 +58,18 @@ def test_explorer_builds_menus_for_quantities_and_colors(dataset):
     assert sum(trace.visible is True for trace in figure.data) == len(dataset)
 
 
-def test_envelope_draws_band_and_mean_per_group(dataset):
+def test_envelope_draws_band_and_center_per_group(dataset):
     figure = dataset.envelope("temperature", by="materiau")
     assert len(figure.data) == 2 * len(dataset.values("materiau"))
+    assert "P10–P90" in figure.layout.title.text
+    assert "médiane" in figure.data[1].hovertemplate
+
+
+def test_envelope_quantile_band_stays_within_minmax(dataset):
+    quantile = dataset.envelope("temperature", band="quantiles", quantiles=(0.25, 0.75))
+    minmax = dataset.envelope("temperature", band="minmax")
+    assert max(quantile.data[0].y) <= max(minmax.data[0].y)
+    assert min(quantile.data[0].y) >= min(minmax.data[0].y)
 
 
 def test_envelope_std_band_is_accepted(dataset):
@@ -111,6 +133,53 @@ def test_scatter_crosses_two_metrics(dataset):
 
 def test_scatter_accepts_the_same_quantity_on_both_axes(dataset):
     assert dataset.scatter(("temperature", "max"), ("temperature", "mean")).data
+
+
+def test_pareto_finds_the_non_dominated_configurations():
+    time = np.array([0.0, 1.0])
+    values = {"c1": (1.0, 1.0), "c2": (2.0, 2.0), "c3": (0.0, 3.0), "c4": (3.0, 0.0)}
+    frames = {
+        name: pd.DataFrame({"time": time, "a": [a, a], "b": [b, b]})
+        for name, (a, b) in values.items()
+    }
+    ds = cs.load_frames(frames, {name: {"id": name} for name in frames}, time="time")
+
+    figure = ds.pareto(("a", "max"), ("b", "max"), sense=("min", "min"))
+    front = figure.data[-1]
+    assert "front de Pareto" in front.name
+    assert sorted(zip(front.x, front.y)) == [(0.0, 3.0), (1.0, 1.0), (3.0, 0.0)]
+
+
+def test_pareto_rejects_an_unknown_sense(dataset):
+    with pytest.raises(ValueError, match="sense"):
+        dataset.pareto("temperature", "rendement", sense=("min", "plus"))
+
+
+def test_curves_switch_to_webgl_and_hide_the_legend_on_large_datasets():
+    ds = _many_configs(150)
+    figure = ds.curves("y")
+    assert all(trace.type == "scattergl" for trace in figure.data)
+    assert not any(trace.showlegend for trace in figure.data)
+    assert figure.layout.showlegend is False
+
+
+def test_curves_stay_in_svg_with_a_readable_legend_on_small_datasets(dataset):
+    figure = dataset.curves("temperature", color="materiau")
+    assert all(trace.type == "scatter" for trace in figure.data)
+    assert any(trace.showlegend for trace in figure.data)
+
+
+def test_curves_render_can_be_forced(dataset):
+    figure = dataset.curves("temperature", render="webgl")
+    assert all(trace.type == "scattergl" for trace in figure.data)
+    with pytest.raises(ValueError, match="render"):
+        dataset.curves("temperature", render="autre")
+
+
+def test_bars_keep_the_top_twenty_by_default():
+    ds = _many_configs(30, points=10)
+    figure = ds.bars("y")
+    assert len(figure.data[0].y) == 20
 
 
 def test_parallel_dimensions_cover_characteristics_and_quantities(dataset):

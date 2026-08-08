@@ -2,7 +2,9 @@
 
 Librairie générique pour comparer visuellement **des lots de CSV de séries temporelles**,
 quand chaque fichier est une configuration et que ses caractéristiques sont inscrites dans
-son nom.
+son nom. Elle est conçue pour rester lisible et fluide **jusqu'à plusieurs centaines de
+configurations** : les graphiques adaptent d'eux-mêmes opacité, légende, échantillonnage et
+moteur de rendu au volume de données.
 
 Le but est d'éliminer le code jetable : au lieu de réécrire « je liste mes fichiers, je
 décode le nom, je boucle, je trace, je mets en forme » à chaque nouvelle question posée aux
@@ -25,6 +27,7 @@ ds.report("rapport.html")                                 # rapport complet à o
 - [Lire les caractéristiques dans les noms de fichiers](#lire-les-caractéristiques-dans-les-noms-de-fichiers)
 - [Prise en main sur des données artificielles](#prise-en-main-sur-des-données-artificielles)
 - [Galerie de graphiques](#galerie-de-graphiques)
+- [Des centaines de configurations](#des-centaines-de-configurations)
 - [Interactions disponibles](#interactions-disponibles)
 - [Sélectionner, dériver, agréger](#sélectionner-dériver-agréger)
 - [Métriques scalaires](#métriques-scalaires)
@@ -32,7 +35,6 @@ ds.report("rapport.html")                                 # rapport complet à o
 - [Ligne de commande](#ligne-de-commande)
 - [Recettes par question posée](#recettes-par-question-posée)
 - [Tests](#tests)
-- [Ancien script `radar_plot.py`](#ancien-script-radar_plotpy)
 
 ## Installation
 
@@ -120,8 +122,8 @@ les survols et les tableaux.
 
 ## Prise en main sur des données artificielles
 
-Une campagne artificielle complète est fournie : 48 configurations d'un refroidissement de
-module de puissance (transitoire thermique, contrainte mécanique, rendement, vibrations).
+Une campagne artificielle complète est fournie : refroidissement d'un module de puissance
+(transitoire thermique, contrainte mécanique, rendement, vibrations, puissance de pompage).
 
 ```python
 import csvscope as cs
@@ -130,7 +132,9 @@ ds = cs.demo_dataset()               # écrit les CSV puis les recharge
 ds.curves("temperature", color="puissance", dash="materiau").show()
 ```
 
-Le script de démonstration génère les données, toute la galerie et le rapport :
+Le script de démonstration pousse le cas à **288 configurations** (3 matériaux ×
+2 maillages × 8 puissances × 6 débits) et génère les données, toute la galerie et le
+rapport :
 
 ```bash
 python examples/galerie_demo.py            # HTML dans examples/figures/
@@ -145,12 +149,14 @@ Toutes les fonctions existent en méthode (`ds.curves(...)`) et en fonction
 ### Courbes superposées
 
 ```python
-ds.curves("temperature", color="puissance", dash="materiau")
+ds.curves("temperature", color="puissance")            # dash="materiau" pour un 2e encodage
 ```
 
-Deux caractéristiques encodées à la fois : la couleur (échelle continue pour une
-caractéristique numérique, palette qualitative sinon) et le style de trait. La légende
-n'affiche qu'une entrée par groupe et reste cliquable.
+La couleur encode une caractéristique (échelle continue si elle est numérique, palette
+qualitative sinon), le style de trait peut en encoder une seconde. La légende n'affiche
+qu'une entrée par groupe et reste cliquable. Ci-dessous, 288 configurations superposées :
+l'opacité et l'épaisseur se sont ajustées seules, et le survol fait remonter une
+configuration au premier plan.
 
 ![Courbes](docs/images/01_courbes.png)
 
@@ -178,8 +184,13 @@ portant la couleur. C'est la vue à privilégier pour explorer sans rien regén�
 ### Faisceau et dispersion
 
 ```python
-ds.envelope("temperature", by="materiau", show_individual=True)   # band="std" pour ±1σ
+ds.envelope("temperature", by="materiau")
 ```
+
+Médiane et bande de quantiles P10–P90 par groupe : la vue de synthèse quand la
+superposition brute devient illisible, robuste aux configurations extrêmes. Options :
+`band="minmax"` ou `"std"`, `quantiles=(0.25, 0.75)`, `center="mean"`,
+`show_individual=True` pour garder les courbes en filigrane.
 
 ![Faisceau](docs/images/04_faisceau.png)
 
@@ -205,7 +216,7 @@ configuration en point survolable.
 ### Classement
 
 ```python
-ds.bars("temperature", metric="max", color="materiau", top=15)
+ds.bars("temperature", metric="max", color="materiau")   # top=20 par défaut
 ```
 
 ![Classement](docs/images/07_classement.png)
@@ -232,11 +243,25 @@ ds.distribution("temperature", by="materiau", metric="max", kind="box")
 ### Compromis entre deux grandeurs
 
 ```python
-ds.scatter(("temperature", "max"), ("rendement", "mean"),
+ds.scatter(("temperature", "max"), ("vibration", "rms"),
            color="materiau", size="contrainte", trend=True)
 ```
 
 ![Compromis](docs/images/10_compromis.png)
+
+### Front de Pareto
+
+```python
+ds.filter(puissance=20).pareto(("temperature", "max"), ("pompage", "mean"),
+                               sense=("min", "min"), color="materiau")
+```
+
+Quand aucun critère unique ne s'impose, le front de Pareto isole les seules configurations
+qu'aucune autre ne bat sur les deux axes à la fois : des centaines de candidates se
+réduisent à une poignée de compromis rationnels, mis en évidence par des losanges reliés.
+`sense` donne le sens d'optimisation de chaque axe (`"min"` ou `"max"`).
+
+![Front de Pareto](docs/images/11_pareto.png)
 
 ### Coordonnées parallèles
 
@@ -248,7 +273,7 @@ ds.parallel(["temperature", "contrainte", "vibration", "rendement"],
 Glisser la souris le long d'un axe filtre les configurations : le moyen le plus direct de
 répondre à « lesquelles tiennent plusieurs critères à la fois ? ».
 
-![Coordonnées parallèles](docs/images/11_coordonnees_paralleles.png)
+![Coordonnées parallèles](docs/images/12_coordonnees_paralleles.png)
 
 ### Radar
 
@@ -260,7 +285,7 @@ ds.radar(["temperature", "pression", "contrainte", "vibration", "rendement"],
 `normalize="max"` conserve les proportions, `"minmax"` accentue les écarts, `False` garde
 les valeurs brutes. Le survol affiche toujours la valeur physique.
 
-![Radar](docs/images/12_radar.png)
+![Radar](docs/images/13_radar.png)
 
 ### Tableau récapitulatif
 
@@ -268,7 +293,28 @@ les valeurs brutes. Le survol affiche toujours la valeur physique.
 cs.metrics_table(ds, ["temperature", "contrainte", "rendement"], metrics=("max", "mean"))
 ```
 
-![Récapitulatif](docs/images/13_recapitulatif.png)
+Hauteur bornée et contenu défilant : le tableau reste utilisable avec des centaines de
+lignes.
+
+![Récapitulatif](docs/images/14_recapitulatif.png)
+
+## Des centaines de configurations
+
+Aucun réglage n'est requis pour passer de 10 à 500 configurations : les graphiques de
+courbes s'adaptent d'eux-mêmes au volume.
+
+| Mécanisme | Comportement |
+| --- | --- |
+| opacité et épaisseur | diminuent progressivement avec le nombre de courbes ; la courbe survolée reprend le premier plan |
+| légende | masquée au-delà de 20 configurations quand elle listerait chaque configuration (le survol identifie) ; conservée dès qu'une caractéristique la regroupe |
+| sous-échantillonnage | budget global de points réparti entre les courbes (`max_points` pour forcer) |
+| moteur de rendu | bascule en WebGL au-delà de ~60 000 points (`render="svg"`/`"webgl"` pour forcer) |
+| classements et tableaux | `bars` garde le top 20, le tableau récapitulatif défile |
+| nuages de points | `boxpoints`/`points` passent aux seuls extrêmes dans les grands groupes |
+
+Pour synthétiser plutôt qu'afficher : `envelope` (médiane + bande de quantiles),
+`pareto` (compromis non dominés), `parallel` (filtrage multi-critères) et `heatmap`
+(agrégat par croisement) restent lisibles quel que soit le nombre de configurations.
 
 ## Interactions disponibles
 
@@ -390,6 +436,7 @@ Options communes : `--motif`, `--temps`, `--gabarit`, `--regex`, `--etiquette`, 
 | Où en est ma campagne (combinaisons calculées) ? | `ds.heatmap("y", x="c1", y="c2")` |
 | Mes maxima sont-ils dispersés ? | `ds.distribution("y", by="carac")` |
 | Ma grandeur A se paie-t-elle en grandeur B ? | `ds.scatter("A", "B")` |
+| Quels sont les meilleurs compromis entre A et B ? | `ds.pareto("A", "B", sense=("min", "max"))` |
 | Quelles configurations tiennent plusieurs critères ? | `ds.parallel(["A", "B", "C"])` |
 | Quelle est la signature globale de chaque famille ? | `ds.radar(["A", "B", "C"], group="carac")` |
 | Je veux tout envoyer à un collègue | `ds.report("rapport.html")` |
@@ -399,15 +446,3 @@ Options communes : `--motif`, `--temps`, `--gabarit`, `--regex`, `--etiquette`, 
 ```bash
 python -m pytest
 ```
-
-## Ancien script `radar_plot.py`
-
-Le script `radar_plot.py` des premières versions est conservé tel quel (radar matplotlib
-depuis un fichier Excel, distribution des maxima, courbes multi-CSV). Ses fonctionnalités
-sont couvertes de façon plus générale par `csvscope` :
-
-| `radar_plot.py` | Équivalent csvscope |
-| --- | --- |
-| `plot_radar_from_df` | `ds.radar([...], metric="max")` |
-| `plot_csv_curves_interactive` | `ds.curves("y")` puis `cs.save(fig, "y.html")` |
-| `analyze_max_distribution` | `ds.distribution("y", metric="max")` et `ds.table("y", "max")` |
