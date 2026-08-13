@@ -164,7 +164,8 @@ def series_scores(ya: np.ndarray, yb: np.ndarray) -> dict[str, float]:
     da, db = ya[mask], yb[mask]
     delta = da - db
     span = max(float(np.ptp(np.concatenate([da, db]))), 1e-12)
-    scale = np.maximum(np.abs(db), 1e-12)
+    floor = max(0.05 * span, 1e-12)
+    scale = np.maximum(np.abs(db), floor)
     corr = float(np.corrcoef(da, db)[0, 1]) if da.size > 1 else float("nan")
     return {
         "rmse": float(np.sqrt(np.mean(delta**2))),
@@ -319,7 +320,7 @@ def format_duration(seconds: float) -> str:
         return "—"
     if abs(seconds) < 1:
         return f"{seconds:.3g} s"
-    if seconds < 90:
+    if seconds < 180:
         return f"{seconds:.3g} s"
     if seconds < 3600:
         return f"{seconds / 60:.3g} min"
