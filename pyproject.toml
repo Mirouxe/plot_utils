@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "csvscope"
+version = "0.1.0"
+description = "Graphiques interactifs pour comparer des lots de CSV de séries temporelles issus de configurations différentes"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "pandas>=1.5",
+    "numpy>=1.23",
+    "plotly>=5.15",
+]
+
+[project.optional-dependencies]
+images = ["kaleido>=0.2"]
+dev = ["pytest>=7", "kaleido>=0.2"]
+
+[project.scripts]
+csvscope = "csvscope.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["csvscope*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::FutureWarning"]

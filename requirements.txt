@@ -1,5 +1,10 @@
-pandas
-numpy
-matplotlib
-openpyxl
-plotly
+# Coeur de csvscope
+pandas>=1.5
+numpy>=1.23
+plotly>=5.15
+
+# Export des figures en PNG/SVG (optionnel)
+kaleido>=0.2
+
+# Tests
+pytest>=7
