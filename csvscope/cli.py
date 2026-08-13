@@ -13,6 +13,16 @@ from pathlib import Path
 from typing import Sequence
 
 from . import plots
+from .dashboards import (
+    coverage,
+    diff,
+    inspect,
+    neighbors,
+    outliers,
+    quality,
+    quantity_board,
+    snapshot,
+)
 from .dataset import load
 from .interactive import save
 from .report import report
@@ -99,6 +109,42 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--points", type=int, default=400, help="nombre de pas de temps par fichier")
     demo.add_argument("--sortie", default=None, help="rapport HTML à générer (optionnel)")
 
+    dashboard = subparsers.add_parser(
+        "dashboard",
+        help="outils d'exploration : fiche d'un CSV, comparaison de deux, etc.",
+    )
+    _add_loading_arguments(dashboard)
+    dashboard.add_argument(
+        "--type",
+        dest="type_dashboard",
+        default="inspect",
+        choices=[
+            "inspect",
+            "diff",
+            "grandeur",
+            "instant",
+            "aberrantes",
+            "proches",
+            "couverture",
+            "qualite",
+        ],
+        help="type de dashboard (défaut : inspect)",
+    )
+    dashboard.add_argument("--config", default=None, help="configuration (inspect, proches) : clé, indice, fichier ou sous-chaîne")
+    dashboard.add_argument("--a", dest="config_a", default=None, help="première configuration (diff)")
+    dashboard.add_argument("--b", dest="config_b", default=None, help="seconde configuration (diff)")
+    dashboard.add_argument("--y", default=None, help="grandeur (grandeur, instant)")
+    dashboard.add_argument("--t", dest="instant", default=None, help="instant (nombre, initial, final, t_max:grandeur)")
+    dashboard.add_argument("--k", type=int, default=8, help="nombre de voisines (proches)")
+    dashboard.add_argument("--z", type=float, default=2.5, help="seuil |z| (aberrantes)")
+    dashboard.add_argument("--sortie", default="dashboard.html", help="fichier HTML produit")
+    dashboard.add_argument(
+        "--plotlyjs",
+        default="cdn",
+        choices=["inline", "cdn"],
+        help="inline : fichier autonome ; cdn : fichier léger",
+    )
+
     return parser
 
 
@@ -141,6 +187,51 @@ def _figure_arguments(args: argparse.Namespace, dataset) -> dict:
     raise ValueError(f"Type de figure non géré : {name}")
 
 
+def _run_dashboard(args: argparse.Namespace, dataset) -> Path:
+    kind = args.type_dashboard
+    kwargs = {"path": args.sortie, "plotlyjs": args.plotlyjs}
+    if kind == "inspect":
+        config = args.config if args.config is not None else (0 if len(dataset) == 1 else None)
+        if config is not None and str(config).isdigit() and str(config) not in dataset.frames:
+            config = int(config)
+        return inspect(dataset, config, **kwargs)
+    if kind == "diff":
+        if args.config_a is None or args.config_b is None:
+            raise SystemExit("dashboard diff : précise --a et --b.")
+        a, b = args.config_a, args.config_b
+        if a.isdigit() and a not in dataset.frames:
+            a = int(a)
+        if b.isdigit() and b not in dataset.frames:
+            b = int(b)
+        return diff(dataset, a, b, **kwargs)
+    if kind == "grandeur":
+        quantity = args.y or dataset.quantities[0]
+        return quantity_board(dataset, quantity, **kwargs)
+    if kind == "instant":
+        at: float | str = args.instant or "final"
+        if args.instant is not None:
+            try:
+                at = float(args.instant)
+            except ValueError:
+                at = args.instant
+        extra = {"quantities": [args.y]} if args.y else {}
+        return snapshot(dataset, at=at, **kwargs, **extra)
+    if kind == "aberrantes":
+        return outliers(dataset, z=args.z, **kwargs)
+    if kind == "proches":
+        if args.config is None:
+            raise SystemExit("dashboard proches : précise --config.")
+        config: str | int = args.config
+        if str(config).isdigit() and str(config) not in dataset.frames:
+            config = int(config)
+        return neighbors(dataset, config, k=args.k, **kwargs)
+    if kind == "couverture":
+        return coverage(dataset, **kwargs)
+    if kind == "qualite":
+        return quality(dataset, **kwargs)
+    raise ValueError(f"Type de dashboard non géré : {kind}")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -176,6 +267,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         figure = FIGURE_TYPES[args.type_figure](dataset, **_figure_arguments(args, dataset))
         path = save(figure, args.sortie)
         print(f"Figure : {path.resolve()}")
+        return 0
+
+    if args.commande == "dashboard":
+        path = _run_dashboard(args, dataset)
+        print(f"Dashboard : {path.resolve()}")
         return 0
 
     return 1

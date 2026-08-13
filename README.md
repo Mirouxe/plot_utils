@@ -28,6 +28,7 @@ ds.report("rapport.html")                                 # rapport complet à o
 - [Prise en main sur des données artificielles](#prise-en-main-sur-des-données-artificielles)
 - [Galerie de graphiques](#galerie-de-graphiques)
 - [Des centaines de configurations](#des-centaines-de-configurations)
+- [Dashboards d'exploration](#dashboards-dexploration)
 - [Interactions disponibles](#interactions-disponibles)
 - [Sélectionner, dériver, agréger](#sélectionner-dériver-agréger)
 - [Métriques scalaires](#métriques-scalaires)
@@ -316,6 +317,62 @@ Pour synthétiser plutôt qu'afficher : `envelope` (médiane + bande de quantile
 `pareto` (compromis non dominés), `parallel` (filtrage multi-critères) et `heatmap`
 (agrégat par croisement) restent lisibles quel que soit le nombre de configurations.
 
+## Dashboards d'exploration
+
+Au-delà des graphiques isolés, csvscope assemble des **pages HTML autonomes** pour
+les questions récurrentes : que contient *ce* CSV ? en quoi deux CSV diffèrent-ils ?
+où se situe une configuration dans la campagne ?
+
+```python
+ds.inspect(0, "fiche.html")                    # récapitulatif d'un CSV
+ds.diff("alu · 20 kW · 1.6 kg/s",
+        "cuivre · 20 kW · 1.6 kg/s",
+        "comparaison.html")                    # comparaison de deux CSV
+cs.inspect_file("un_essai.csv", "fiche.html")  # un fichier, hors campagne
+cs.diff_files("a.csv", "b.csv", "cmp.html")
+```
+
+La configuration se désigne par son indice, le nom du fichier, l'étiquette, ou une
+sous-chaîne unique.
+
+### Fiche d'un CSV
+
+Carte d'identité, indicateurs (durée, pas de temps, valeurs manquantes), toutes les
+séries, métriques, corrélations, et position dans la campagne (percentiles, faisceau).
+
+```python
+ds.inspect("alu · 20 kW · 1.6 kg/s", "fiche.html")
+```
+
+![Fiche d'une configuration](docs/images/15_fiche.png)
+
+### Comparaison de deux CSV
+
+Caractéristiques identiques ou divergentes, superposition des courbes, écarts A − B,
+tableau de métriques avec Δ, scores de similarité (RMSE, corrélation).
+
+```python
+ds.diff(a, b, "comparaison.html")
+```
+
+![Comparaison de deux configurations](docs/images/16_comparaison.png)
+
+### Autres outils
+
+| Question | Appel |
+| --- | --- |
+| Une grandeur sous toutes ses coutures | `ds.quantity_board("temperature", "grandeur.html")` |
+| Coupe à un instant t | `ds.snapshot(at=40, path="instant.html")` |
+| Quelles configurations sortent du lot ? | `ds.outliers("aberrantes.html")` |
+| Les plus proches d'une fiche | `ds.neighbors(config, "proches.html", k=8)` |
+| Combinaisons calculées / manquantes | `ds.coverage("couverture.html")` |
+| Sampling, NaN, durées atypiques | `ds.quality("qualite.html")` |
+
+`snapshot(at=...)` accepte un temps numérique, `"initial"`, `"final"`, ou
+`"t_max:temperature"` (instant médian du pic de cette grandeur).
+
+![Couverture de campagne](docs/images/17_couverture.png)
+
 ## Interactions disponibles
 
 Sauvegarde d'une figure autonome :
@@ -419,6 +476,14 @@ cs.build_report(
 python -m csvscope infos mes_csv
 python -m csvscope rapport mes_csv --sortie rapport.html --couleur maillage
 python -m csvscope figure mes_csv --type curves --y temperature --couleur maillage
+python -m csvscope dashboard mes_csv --type inspect --config 0 --sortie fiche.html
+python -m csvscope dashboard mes_csv --type diff --a 0 --b 1 --sortie cmp.html
+python -m csvscope dashboard mes_csv --type grandeur --y temperature
+python -m csvscope dashboard mes_csv --type instant --t final
+python -m csvscope dashboard mes_csv --type aberrantes
+python -m csvscope dashboard mes_csv --type proches --config 0
+python -m csvscope dashboard mes_csv --type couverture
+python -m csvscope dashboard mes_csv --type qualite
 python -m csvscope demo --dossier donnees_demo --sortie rapport.html
 ```
 
@@ -439,6 +504,9 @@ Options communes : `--motif`, `--temps`, `--gabarit`, `--regex`, `--etiquette`, 
 | Quels sont les meilleurs compromis entre A et B ? | `ds.pareto("A", "B", sense=("min", "max"))` |
 | Quelles configurations tiennent plusieurs critères ? | `ds.parallel(["A", "B", "C"])` |
 | Quelle est la signature globale de chaque famille ? | `ds.radar(["A", "B", "C"], group="carac")` |
+| Que contient *ce* CSV, en détail ? | `ds.inspect(config)` |
+| En quoi deux CSV diffèrent-ils ? | `ds.diff(a, b)` |
+| Où en est ma campagne (trous du plan) ? | `ds.coverage()` |
 | Je veux tout envoyer à un collègue | `ds.report("rapport.html")` |
 
 ## Tests

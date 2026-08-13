@@ -11,6 +11,8 @@ ses colonnes portent des grandeurs calculées en fonction du temps.
 
     cs.save(ds.curves("temperature", color="maillage"), "temperature.html")
     ds.report("rapport.html")
+    ds.inspect(0, "fiche.html")                 # dashboard d'un CSV
+    ds.diff(0, 1, "comparaison.html")            # dashboard de deux CSV
 
 Toutes les figures sont des objets Plotly : elles restent modifiables
 (``fig.update_layout(...)``) avant sauvegarde.
@@ -18,6 +20,18 @@ Toutes les figures sont des objets Plotly : elles restent modifiables
 
 from __future__ import annotations
 
+from .dashboards import (
+    coverage,
+    diff,
+    diff_files,
+    inspect,
+    inspect_file,
+    neighbors,
+    outliers,
+    quality,
+    quantity_board,
+    snapshot,
+)
 from .dataset import Dataset, load, load_frames
 from .interactive import configure, save, show, to_div
 from .metrics import METRICS, register_metric
@@ -68,6 +82,16 @@ __all__ = [
     "radar",
     "report",
     "build_report",
+    "inspect",
+    "inspect_file",
+    "diff",
+    "diff_files",
+    "quantity_board",
+    "snapshot",
+    "outliers",
+    "neighbors",
+    "coverage",
+    "quality",
     "save",
     "show",
     "to_div",

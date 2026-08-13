@@ -640,3 +640,57 @@ class Dataset:
         from .report import report
 
         return report(self, *args, **kwargs)
+
+    def resolve(self, spec: str | int) -> str:
+        """Retrouve une configuration par clé, indice, fichier ou sous-chaîne unique."""
+        from .dashboards import resolve_config
+
+        return resolve_config(self, spec)
+
+    def inspect(self, config: str | int | None = None, *args, **kwargs):
+        """Dashboard récapitulatif d'une configuration (un CSV)."""
+        from .dashboards import inspect
+
+        return inspect(self, config, *args, **kwargs)
+
+    def diff(self, a: str | int, b: str | int, *args, **kwargs):
+        """Dashboard récapitulatif de la comparaison de deux configurations."""
+        from .dashboards import diff
+
+        return diff(self, a, b, *args, **kwargs)
+
+    def quantity_board(self, *args, **kwargs):
+        """Dashboard d'exploration d'une grandeur sur toute la campagne."""
+        from .dashboards import quantity_board
+
+        return quantity_board(self, *args, **kwargs)
+
+    def snapshot(self, *args, **kwargs):
+        """Valeurs de toutes les configurations à un instant donné."""
+        from .dashboards import snapshot
+
+        return snapshot(self, *args, **kwargs)
+
+    def outliers(self, *args, **kwargs):
+        """Configurations dont une métrique s'écarte de la campagne."""
+        from .dashboards import outliers
+
+        return outliers(self, *args, **kwargs)
+
+    def neighbors(self, *args, **kwargs):
+        """Configurations dont les séries sont les plus proches d'une fiche."""
+        from .dashboards import neighbors
+
+        return neighbors(self, *args, **kwargs)
+
+    def coverage(self, *args, **kwargs):
+        """Couverture du plan d'expérience (combinaisons présentes / manquantes)."""
+        from .dashboards import coverage
+
+        return coverage(self, *args, **kwargs)
+
+    def quality(self, *args, **kwargs):
+        """Contrôle qualité des CSV (sampling, valeurs manquantes)."""
+        from .dashboards import quality
+
+        return quality(self, *args, **kwargs)

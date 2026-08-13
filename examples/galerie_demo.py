@@ -7,7 +7,7 @@ Le script :
    dans le nom du fichier : 3 matériaux × 2 maillages × 8 puissances × 6 débits) ;
 2. les recharge avec csvscope ;
 3. construit toute la galerie de graphiques interactifs ;
-4. écrit un rapport HTML à onglets, et éventuellement les captures PNG.
+4. écrit un rapport HTML à onglets, les dashboards d'exploration, et éventuellement les captures PNG.
 
     python examples/galerie_demo.py --png
 
@@ -167,6 +167,20 @@ def main() -> int:
     )
     print(f"Sélection : {len(fort)} configurations sur {len(ds)}")
 
+    # 5. Dashboards d'exploration (fiche d'un CSV, comparaison de deux, etc.).
+    dashboards = Path(args.sortie) / "dashboards"
+    a = ds.filter(materiau="alu", maillage="fin", puissance=20, debit=lambda q: abs(float(q) - 1.6) < 1e-9).configs[0]
+    b = ds.filter(materiau="cuivre", maillage="fin", puissance=20, debit=lambda q: abs(float(q) - 1.6) < 1e-9).configs[0]
+    ds.inspect(a, dashboards / "fiche.html")
+    ds.diff(a, b, dashboards / "comparaison.html")
+    ds.quantity_board("temperature", dashboards / "grandeur.html")
+    ds.snapshot(at="final", path=dashboards / "instant.html")
+    ds.outliers(dashboards / "aberrantes.html")
+    ds.neighbors(a, dashboards / "proches.html", k=8)
+    ds.coverage(dashboards / "couverture.html")
+    ds.quality(dashboards / "qualite.html")
+    print(f"Dashboards : {dashboards}")
+
     if args.png:
         dossier_png = Path(args.png_dossier)
         dossier_png.mkdir(parents=True, exist_ok=True)
@@ -174,6 +188,18 @@ def main() -> int:
             largeur = 900 if "radar" in nom else 1150
             hauteur = min(int(figure.layout.height or 560), 1000)
             figure.write_image(dossier_png / f"{nom}.png", width=largeur, height=hauteur)
+        from csvscope.dashboards import diff_figures, inspect_figures
+        from csvscope.dashboards.tools import _count_heatmap
+
+        fiche = inspect_figures(ds, a)
+        fiche["grille"].write_image(dossier_png / "15_fiche.png", width=1150, height=900)
+        cmp_figs = diff_figures(ds, a, b)
+        cmp_figs["superposition"].write_image(
+            dossier_png / "16_comparaison.png", width=1150, height=900
+        )
+        _count_heatmap(ds, "puissance", "debit").write_image(
+            dossier_png / "17_couverture.png", width=1150, height=480
+        )
         print(f"Captures PNG dans {dossier_png}")
 
     return 0
