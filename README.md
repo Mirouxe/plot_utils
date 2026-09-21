@@ -137,9 +137,17 @@ Opérateurs disponibles (`CRITERION_OPERATORS`) : `mean`, `max`, `min`, `abs_max
 méthode des trapèzes sur la colonne `time_column`). Tu peux en ajouter en enrichissant le
 dictionnaire `CRITERION_OPERATORS` avec une fonction `(df, colonne, colonne_temps) -> float`.
 
-Comme les critères ont des unités différentes, chaque axe du radar est par défaut normalisé
-par le maximum absolu observé entre trajectoires (valeur de référence indiquée sur l'axe).
-Passe `normalize=False` pour tracer les valeurs brutes.
+Comme les critères ont des unités différentes, chaque axe du radar possède **sa propre
+échelle** : la géométrie est normalisée pour que toutes les grandeurs soient visibles, mais
+les graduations affichées le long de chaque axe sont les **vraies valeurs** du critère
+(bornes « rondes », `n_levels` niveaux, défaut 5). Quand la valeur au centre n'est pas 0,
+elle est indiquée sous le nom de l'axe.
+
+- `include_zero=True` (défaut) : le zéro est toujours dans l'échelle (centre = 0 pour les
+  grandeurs positives), ce qui rend les surfaces comparables.
+- `include_zero=False` : chaque échelle est resserrée sur les valeurs observées, pour mieux
+  distinguer des trajectoires proches.
+- `normalize=False` : toutes les grandeurs partagent un même axe radial en valeurs brutes.
 
 ### Séries temporelles complètes
 

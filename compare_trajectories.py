@@ -154,35 +154,120 @@ def compute_trajectory_criteria(
     return values
 
 
+def _nice_step(raw_step: float) -> float:
+    """Arrondit un pas de graduation au nombre « rond » supérieur (1, 2, 2.5, 5 × 10^k)."""
+    if raw_step <= 0 or not np.isfinite(raw_step):
+        return 1.0
+    exponent = np.floor(np.log10(raw_step))
+    fraction = raw_step / 10 ** exponent
+    for nice in (1.0, 2.0, 2.5, 5.0, 10.0):
+        if fraction <= nice * (1 + 1e-9):
+            return float(nice * 10 ** exponent)
+    return float(10 ** (exponent + 1))
+
+
+def nice_axis_bounds(
+    vmin: float, vmax: float, n_levels: int, include_zero: bool = True
+) -> tuple[float, float]:
+    """
+    Calcule des bornes « rondes » (lo, hi) encadrant [vmin, vmax] avec exactement
+    `n_levels` intervalles réguliers.
+
+    Avec `include_zero=True`, le zéro est toujours dans [lo, hi] : le centre du radar
+    vaut 0 pour les grandeurs positives, ce qui rend les surfaces comparables.
+    Avec `include_zero=False`, l'échelle est resserrée sur les valeurs observées.
+    """
+    lo_target = min(0.0, vmin) if include_zero else vmin
+    hi_target = max(0.0, vmax) if include_zero else vmax
+    span = hi_target - lo_target
+    if span == 0:
+        span = abs(vmax) if vmax != 0 else 1.0
+
+    step = _nice_step(span / n_levels)
+    while True:
+        lo = np.floor(lo_target / step + 1e-9) * step
+        hi = lo + n_levels * step
+        if hi >= hi_target - 1e-9 * step:
+            return float(lo), float(hi)
+        step = _nice_step(step * 1.01)
+
+
+def _format_tick(value: float) -> str:
+    if value == 0:
+        return "0"
+    text = f"{value:.4g}"
+    if "e" in text:
+        mantissa, exponent = text.split("e")
+        text = f"{mantissa}e{int(exponent)}"
+    return text
+
+
+def _polar_label_alignment(angle: float) -> tuple[str, str]:
+    """Alignement d'un texte placé à l'extérieur du radar selon l'angle (en radians)."""
+    cos_a, sin_a = np.cos(angle), np.sin(angle)
+    ha = "center" if abs(cos_a) < 0.2 else ("left" if cos_a > 0 else "right")
+    va = "center" if abs(sin_a) < 0.2 else ("bottom" if sin_a > 0 else "top")
+    return ha, va
+
+
 def plot_comparison_radar(
     table: pd.DataFrame,
     title: str,
     output_path: Path,
     normalize: bool = True,
+    n_levels: int = 5,
+    include_zero: bool = True,
 ):
     """
     Trace un radar multi-trajectoires : une ligne du tableau = une trajectoire,
     une colonne = un critère (un axe du radar).
+
+    Avec `normalize=True`, chaque axe possède sa propre échelle : la géométrie est
+    ramenée à [0, 1] pour que toutes les grandeurs soient visibles, mais les
+    graduations affichées le long de chaque axe sont les vraies valeurs du critère.
     """
     labels = list(table.columns)
     if len(labels) < 3:
         print("Attention : un radar est plus lisible avec au moins 3 critères.")
 
-    if normalize:
-        # Chaque axe est ramené à [-1, 1] par rapport au maximum absolu entre trajectoires,
-        # sinon les critères d'unités différentes ne sont pas comparables visuellement.
-        ref = table.abs().max(axis=0).replace(0, np.nan)
-        plotted = (table / ref).fillna(0.0)
-        tick_labels = [f"{label}\n(réf. = {ref[label]:.3g})" for label in labels]
-    else:
-        plotted = table
-        tick_labels = labels
-
     angles = np.linspace(0, 2 * np.pi, len(labels), endpoint=False)
     angles_closed = np.concatenate((angles, [angles[0]]))
 
-    fig, ax = plt.subplots(figsize=(9, 9), subplot_kw={"polar": True})
+    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw={"polar": True})
     colors = plt.cm.tab10(np.linspace(0, 1, 10))
+    axis_titles = list(labels)
+
+    if normalize:
+        bounds = {
+            label: nice_axis_bounds(table[label].min(), table[label].max(), n_levels, include_zero)
+            for label in labels
+        }
+        lo = pd.Series({label: b[0] for label, b in bounds.items()})
+        hi = pd.Series({label: b[1] for label, b in bounds.items()})
+        plotted = (table - lo) / (hi - lo)
+
+        fractions = np.linspace(0, 1, n_levels + 1)
+        ax.set_ylim(0, 1)
+        ax.set_yticks(fractions)
+        ax.set_yticklabels([])
+
+        # Graduations réelles le long de chaque axe. La valeur du centre (commune à
+        # tous les axes en position) est reportée dans le titre de l'axe si non nulle.
+        for k, (angle, label) in enumerate(zip(angles, labels)):
+            if lo[label] != 0:
+                axis_titles[k] = f"{label}\n(centre = {_format_tick(lo[label])})"
+            for frac in fractions[1:]:
+                value = lo[label] + frac * (hi[label] - lo[label])
+                ax.text(
+                    angle, frac, _format_tick(value),
+                    fontsize=7, color="dimgray", ha="center", va="center",
+                    bbox={"boxstyle": "round,pad=0.15", "fc": "white", "ec": "none", "alpha": 0.8},
+                    zorder=5,
+                )
+        label_radius = 1.12
+    else:
+        plotted = table
+        label_radius = None
 
     for i, (name, row) in enumerate(plotted.iterrows()):
         values = row.values.astype(float)
@@ -192,7 +277,14 @@ def plot_comparison_radar(
         ax.fill(angles_closed, values_closed, alpha=0.12, color=color)
 
     ax.set_xticks(angles)
-    ax.set_xticklabels(tick_labels, fontsize=9)
+    if label_radius is None:
+        ax.set_xticklabels(axis_titles, fontsize=9)
+    else:
+        # Titres d'axes placés manuellement pour ne pas chevaucher la graduation extérieure.
+        ax.set_xticklabels([])
+        for angle, axis_title in zip(angles, axis_titles):
+            ha, va = _polar_label_alignment(angle)
+            ax.text(angle, label_radius, axis_title, fontsize=9, ha=ha, va=va)
     ax.set_title(title, pad=25)
     ax.grid(True)
     ax.legend(loc="upper right", bbox_to_anchor=(1.30, 1.10))
@@ -213,6 +305,8 @@ def compare_trajectories(
     output_path: str = "radar_comparaison_trajectoires.png",
     title: str = "Comparaison des trajectoires",
     normalize: bool = True,
+    n_levels: int = 5,
+    include_zero: bool = True,
     derive_columns: bool = True,
 ) -> pd.DataFrame:
     """
@@ -226,6 +320,13 @@ def compare_trajectories(
     Opérateurs disponibles : voir `CRITERION_OPERATORS` (mean, max, min, abs_max,
     median, std, range, rms, final, integral). L'intégrale temporelle utilise
     la méthode des trapèzes sur la colonne `time_column`.
+
+    Avec `normalize=True` (défaut), chaque axe du radar a sa propre échelle réelle,
+    graduée en `n_levels` niveaux ; la géométrie est normalisée pour que toutes les
+    grandeurs restent visibles. `include_zero=True` force le zéro dans chaque échelle
+    (centre = 0 pour les grandeurs positives) ; `include_zero=False` resserre chaque
+    échelle sur les valeurs observées. Avec `normalize=False`, toutes les grandeurs
+    partagent un même axe radial en valeurs brutes.
 
     Retourne un DataFrame (lignes = trajectoires, colonnes = critères) des valeurs brutes.
     """
@@ -247,7 +348,14 @@ def compare_trajectories(
     table = pd.DataFrame.from_dict(rows, orient="index")
     table.index.name = "trajectoire"
 
-    plot_comparison_radar(table, title=title, output_path=Path(output_path), normalize=normalize)
+    plot_comparison_radar(
+        table,
+        title=title,
+        output_path=Path(output_path),
+        normalize=normalize,
+        n_levels=n_levels,
+        include_zero=include_zero,
+    )
     return table
 
 
