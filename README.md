@@ -101,6 +101,43 @@ results = analyze_max_distribution(
 print(results["highest_point_between_1sigma_2sigma"])
 ```
 
+## Comparaison de plusieurs trajectoires (radar)
+
+La fonction `compare_trajectories` compare plusieurs trajectoires sur des critères choisis :
+- chaque trajectoire correspond à un CSV du dossier dont le **nom de fichier contient le nom de la trajectoire**,
+- un critère est un **opérateur statistique appliqué à une grandeur** du CSV,
+- un radar comparatif (une courbe par trajectoire, un axe par critère) est sauvegardé.
+
+```python
+from radar_plot import compare_trajectories
+
+table = compare_trajectories(
+    trajectory_names=["traj_A", "traj_B", "traj_C"],
+    criteria=[
+        ("max", "temperature"),   # forme tuple
+        "mean(pression)",         # forme operateur(colonne)
+        "integral:vitesse",       # forme operateur:colonne
+        "rms(norme_vitesse)",     # les grandeurs dérivées sont disponibles
+    ],
+    csv_folder="mes_csv",
+    time_column="temps",
+    output_path="figures/radar_trajectoires.png",
+)
+print(table)  # lignes = trajectoires, colonnes = critères (valeurs brutes)
+```
+
+Opérateurs disponibles (`CRITERION_OPERATORS`) : `mean`, `max`, `min`, `abs_max`, `median`,
+`std`, `range`, `rms`, `final` (dernière valeur) et `integral` (intégrale temporelle par la
+méthode des trapèzes sur la colonne `time_column`). Tu peux en ajouter en enrichissant le
+dictionnaire `CRITERION_OPERATORS` avec une fonction `(df, colonne, colonne_temps) -> float`.
+
+Comme les critères ont des unités différentes, chaque axe du radar est par défaut normalisé
+par le maximum absolu observé entre trajectoires (valeur de référence indiquée sur l'axe).
+Passe `normalize=False` pour tracer les valeurs brutes.
+
+Si plusieurs fichiers contiennent le nom d'une trajectoire, celui dont le nom (sans extension)
+est exactement ce nom est retenu ; sinon une erreur liste les fichiers ambigus.
+
 ## Personnalisation
 
 Modifie la fonction `add_derived_columns()` dans `radar_plot.py` pour ajouter tes propres opérations métier.
