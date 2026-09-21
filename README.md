@@ -101,15 +101,21 @@ results = analyze_max_distribution(
 print(results["highest_point_between_1sigma_2sigma"])
 ```
 
-## Comparaison de plusieurs trajectoires (radar)
+## Comparaison de plusieurs trajectoires (`compare_trajectories.py`)
+
+Le script `compare_trajectories.py` regroupe les outils de comparaison de trajectoires.
+Chaque trajectoire correspond à un CSV du dossier dont le **nom de fichier contient le nom
+de la trajectoire**. Si plusieurs fichiers contiennent ce nom, celui dont le nom (sans
+extension) est exactement ce nom est retenu ; sinon une erreur liste les fichiers ambigus.
+
+### Radar de critères scalaires
 
 La fonction `compare_trajectories` compare plusieurs trajectoires sur des critères choisis :
-- chaque trajectoire correspond à un CSV du dossier dont le **nom de fichier contient le nom de la trajectoire**,
 - un critère est un **opérateur statistique appliqué à une grandeur** du CSV,
 - un radar comparatif (une courbe par trajectoire, un axe par critère) est sauvegardé.
 
 ```python
-from radar_plot import compare_trajectories
+from compare_trajectories import compare_trajectories
 
 table = compare_trajectories(
     trajectory_names=["traj_A", "traj_B", "traj_C"],
@@ -135,8 +141,25 @@ Comme les critères ont des unités différentes, chaque axe du radar est par d�
 par le maximum absolu observé entre trajectoires (valeur de référence indiquée sur l'axe).
 Passe `normalize=False` pour tracer les valeurs brutes.
 
-Si plusieurs fichiers contiennent le nom d'une trajectoire, celui dont le nom (sans extension)
-est exactement ce nom est retenu ; sinon une erreur liste les fichiers ambigus.
+### Séries temporelles complètes
+
+La fonction `compare_time_series` suit la même logique, mais compare les grandeurs sur
+**toute leur évolution temporelle** et non sur un critère scalaire : pour chaque grandeur
+demandée, un visuel superposant les courbes de toutes les trajectoires est sauvegardé
+(un fichier par grandeur dans `output_dir`).
+
+```python
+from compare_trajectories import compare_time_series
+
+figures = compare_time_series(
+    trajectory_names=["traj_A", "traj_B", "traj_C"],
+    quantities=["temperature", "pression", "norme_vitesse"],
+    csv_folder="mes_csv",
+    time_column="temps",
+    output_dir="figures/series",
+)
+print(figures)  # {"temperature": "figures/series/temperature.png", ...}
+```
 
 ## Personnalisation
 
