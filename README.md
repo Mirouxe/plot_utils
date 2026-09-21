@@ -169,6 +169,23 @@ figures = compare_time_series(
 print(figures)  # {"temperature": "figures/series/temperature.png", ...}
 ```
 
+Pour obtenir **une seule figure** regroupant toutes les grandeurs dans une grille de
+sous-graphes (un sous-graphe par grandeur, légende commune), utilise `compare_time_series_grid` :
+
+```python
+from compare_trajectories import compare_time_series_grid
+
+chemin = compare_time_series_grid(
+    trajectory_names=["traj_A", "traj_B", "traj_C"],
+    quantities=["temperature", "pression", "norme_vitesse"],
+    csv_folder="mes_csv",
+    time_column="temps",
+    output_path="figures/series_grille.png",
+    n_cols=2,        # nombre de colonnes de la grille
+    sharex=True,     # axe temporel partagé entre sous-graphes
+)
+```
+
 ## Personnalisation
 
 Modifie la fonction `add_derived_columns()` dans `radar_plot.py` pour ajouter tes propres opérations métier.

@@ -367,6 +367,38 @@ def _safe_filename(text: str) -> str:
     return "".join(c if c.isalnum() or c in "-_." else "_" for c in text)
 
 
+def _check_columns(trajectories: dict[str, pd.DataFrame], columns: list[str]):
+    for name, df in trajectories.items():
+        missing = [c for c in columns if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"Colonnes introuvables dans la trajectoire '{name}' "
+                f"(fichier : {df.attrs['source_file']}) : {missing}"
+            )
+
+
+def _plot_quantity_on_axis(
+    ax,
+    trajectories: dict[str, pd.DataFrame],
+    quantity: str,
+    time_column: str,
+    line_width: float = 1.8,
+):
+    """Superpose, sur `ax`, la grandeur `quantity` de chaque trajectoire en fonction du temps."""
+    colors = plt.cm.tab10(np.linspace(0, 1, 10))
+    for i, (name, df) in enumerate(trajectories.items()):
+        order = np.argsort(df[time_column].values)
+        ax.plot(
+            df[time_column].values[order],
+            df[quantity].values[order],
+            linewidth=line_width,
+            color=colors[i % len(colors)],
+            label=str(name),
+        )
+    ax.set_ylabel(quantity)
+    ax.grid(alpha=0.3)
+
+
 def plot_time_series_comparison(
     trajectories: dict[str, pd.DataFrame],
     quantity: str,
@@ -377,24 +409,68 @@ def plot_time_series_comparison(
 ):
     """Superpose la grandeur `quantity` de chaque trajectoire en fonction du temps."""
     fig, ax = plt.subplots(figsize=(11, 6))
-    colors = plt.cm.tab10(np.linspace(0, 1, 10))
-
-    for i, (name, df) in enumerate(trajectories.items()):
-        order = np.argsort(df[time_column].values)
-        ax.plot(
-            df[time_column].values[order],
-            df[quantity].values[order],
-            linewidth=line_width,
-            color=colors[i % len(colors)],
-            label=str(name),
-        )
-
+    _plot_quantity_on_axis(ax, trajectories, quantity, time_column, line_width)
     ax.set_xlabel(time_column)
-    ax.set_ylabel(quantity)
     ax.set_title(title or f"Comparaison de '{quantity}' entre trajectoires")
-    ax.grid(alpha=0.3)
     ax.legend()
     plt.tight_layout()
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Figure sauvegardée : {output_path}")
+
+
+def plot_time_series_grid(
+    trajectories: dict[str, pd.DataFrame],
+    quantities: list[str],
+    time_column: str,
+    output_path: Path,
+    n_cols: int = 2,
+    title: str | None = None,
+    sharex: bool = True,
+    line_width: float = 1.8,
+):
+    """
+    Trace toutes les grandeurs sur une grille de sous-graphes (un sous-graphe par
+    grandeur, toutes les trajectoires superposées) avec une légende commune.
+    """
+    n = len(quantities)
+    n_cols = max(1, min(n_cols, n))
+    n_rows = int(np.ceil(n / n_cols))
+
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(6.5 * n_cols, 3.8 * n_rows),
+        sharex=sharex,
+        squeeze=False,
+    )
+    flat_axes = axes.ravel()
+
+    for ax, quantity in zip(flat_axes, quantities):
+        _plot_quantity_on_axis(ax, trajectories, quantity, time_column, line_width)
+        ax.set_title(quantity, fontsize=10)
+
+    for ax in flat_axes[n:]:
+        ax.set_visible(False)
+
+    # Étiquette de temps sur le dernier sous-graphe visible de chaque colonne.
+    for col in range(n_cols):
+        visible_in_col = [axes[row, col] for row in range(n_rows) if row * n_cols + col < n]
+        if visible_in_col:
+            visible_in_col[-1].set_xlabel(time_column)
+            if sharex:
+                visible_in_col[-1].tick_params(axis="x", labelbottom=True)
+
+    handles, labels = flat_axes[0].get_legend_handles_labels()
+    fig.suptitle(title or "Comparaison des trajectoires", fontsize=13, y=0.995)
+    fig.legend(
+        handles, labels,
+        loc="upper center", bbox_to_anchor=(0.5, 0.965),
+        ncol=min(len(labels), 6), frameon=False,
+    )
+    # Réserve l'espace du titre et de la légende commune au-dessus des sous-graphes.
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=200, bbox_inches="tight")
@@ -428,14 +504,7 @@ def compare_time_series(
     trajectories = load_trajectories(
         trajectory_names, csv_folder=csv_folder, pattern=pattern, derive_columns=derive_columns
     )
-
-    for name, df in trajectories.items():
-        missing = [c for c in [time_column, *quantities] if c not in df.columns]
-        if missing:
-            raise ValueError(
-                f"Colonnes introuvables dans la trajectoire '{name}' "
-                f"(fichier : {df.attrs['source_file']}) : {missing}"
-            )
+    _check_columns(trajectories, [time_column, *quantities])
 
     output_dir = Path(output_dir)
     figures = {}
@@ -445,3 +514,38 @@ def compare_time_series(
         figures[quantity] = str(output_path)
 
     return figures
+
+
+def compare_time_series_grid(
+    trajectory_names: list[str],
+    quantities: list[str],
+    csv_folder: str = ".",
+    pattern: str = "*.csv",
+    time_column: str = "temps",
+    output_path: str = "comparaison_series_grille.png",
+    n_cols: int = 2,
+    title: str = "Comparaison des trajectoires",
+    sharex: bool = True,
+    derive_columns: bool = True,
+) -> str:
+    """
+    Même comparaison que `compare_time_series`, mais toutes les grandeurs sont
+    rassemblées dans une seule figure : une grille de sous-graphes (un par grandeur,
+    `n_cols` colonnes) avec les trajectoires superposées et une légende commune.
+
+    Retourne le chemin de la figure sauvegardée.
+    """
+    if not quantities:
+        raise ValueError("Aucune grandeur à comparer")
+
+    trajectories = load_trajectories(
+        trajectory_names, csv_folder=csv_folder, pattern=pattern, derive_columns=derive_columns
+    )
+    _check_columns(trajectories, [time_column, *quantities])
+
+    output_path = Path(output_path)
+    plot_time_series_grid(
+        trajectories, quantities, time_column, output_path,
+        n_cols=n_cols, title=title, sharex=sharex,
+    )
+    return str(output_path)
