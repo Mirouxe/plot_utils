@@ -222,9 +222,42 @@ Principe :
    somme pondérée ;
 4. les `k` premières du classement sont sélectionnées.
 
+### Filtre des scénarios extrêmes
+
+Pour ne retenir que les scénarios réalistes, un filtre optionnel écarte, **avant** l'étude de
+Pareto, les trajectoires dont un critère dépasse un seuil de sa distribution :
+
+```python
+resume, classement = select_trajectories_pareto(
+    csv_folder="mes_csv",
+    criteria=["max(temperature)", "-mean(pression)"],
+    k=5,
+    outlier_quantile=0.95,                    # ou outlier_sigma=2.0 (moyenne + 2σ)
+    outlier_side="upper",                     # "upper" (défaut), "lower" ou "both"
+    outlier_criteria=["max(temperature)"],    # optionnel : critères soumis au filtre (défaut : tous)
+)
+```
+
+```bash
+python selection_pareto.py mes_csv --criteria "max(temperature)" "mean(pression)" \
+  --senses max min -k 5 --outlier-sigma 2
+```
+
+- `outlier_quantile=0.95` : seuil = quantile empirique 95 % de chaque critère ; écarte donc
+  toujours ~5 % des trajectoires par critère, quelle que soit la forme de la distribution.
+- `outlier_sigma=2.0` : seuil = moyenne + 2 écarts-types ; s'adapte à la dispersion mais des
+  valeurs très extrêmes gonflent l'écart-type et peuvent en masquer d'autres.
+- `outlier_criteria` accepte aussi des critères qui ne sont pas des objectifs (ils sont alors
+  calculés uniquement pour le filtre).
+
+Une trajectoire est exclue dès qu'un critère filtré sort du seuil. Les exclues sont listées
+avec leur motif dans `trajectoires_exclues.csv` et apparaissent en croix orange sur les nuages
+de points, où les seuils sont tracés en pointillés.
+
 Sorties écrites dans `output_dir` :
 - `classement_pareto.csv` : toutes les trajectoires avec valeurs des critères, `rang_pareto`,
   `distance_ideal`, `crowding`, `score_pondere`, `ordre` et `selectionnee` ;
+- `trajectoires_exclues.csv` : trajectoires écartées par le filtre (si activé), avec le motif ;
 - `trajectoires_selectionnees.csv` et `tableau_selection.png` : récapitulatif des `k` retenues ;
 - `pareto_paires.png` : nuages critère contre critère (front et sélection mis en évidence) ;
 - `pareto_3d.png` : nuage 3D (uniquement pour 3 critères) ;
