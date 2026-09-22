@@ -186,6 +186,51 @@ chemin = compare_time_series_grid(
 )
 ```
 
+## Sélection de trajectoires par étude de Pareto (`selection_pareto.py`)
+
+Le script `selection_pareto.py` trouve les `k` trajectoires réalisant le meilleur compromis
+entre plusieurs critères (2 à 4). L'entrée est un dossier contenant un CSV par trajectoire
+et la liste des critères à compromettre (même syntaxe que `compare_trajectories`).
+
+```python
+from selection_pareto import select_trajectories_pareto
+
+resume, classement = select_trajectories_pareto(
+    csv_folder="mes_csv",
+    criteria=["max(temperature)", "-mean(pression)", "rms(norme_vitesse)"],  # "-" = à minimiser
+    k=5,
+    method="ideal",          # départage au sein d'un front : ideal | crowding | weighted_sum
+    weights=[2, 1, 1],       # poids optionnels (ideal et weighted_sum)
+    output_dir="resultats_pareto",
+)
+print(resume)  # tableau récapitulatif des k trajectoires retenues
+```
+
+En ligne de commande (le sens de chaque critère se donne avec `--senses`) :
+
+```bash
+python selection_pareto.py mes_csv \
+  --criteria "max(temperature)" "mean(pression)" "rms(norme_vitesse)" \
+  --senses max min max -k 5 --output-dir resultats_pareto
+```
+
+Principe :
+1. chaque critère est calculé pour chaque CSV du dossier (nom de trajectoire = nom du fichier) ;
+2. les trajectoires sont classées par **fronts de Pareto** successifs (rang 1 = non dominées) ;
+3. au sein d'un front, elles sont départagées par `method` : distance au point idéal
+   (critères normalisés, défaut), distance de crowding NSGA-II (favorise la diversité) ou
+   somme pondérée ;
+4. les `k` premières du classement sont sélectionnées.
+
+Sorties écrites dans `output_dir` :
+- `classement_pareto.csv` : toutes les trajectoires avec valeurs des critères, `rang_pareto`,
+  `distance_ideal`, `crowding`, `score_pondere`, `ordre` et `selectionnee` ;
+- `trajectoires_selectionnees.csv` et `tableau_selection.png` : récapitulatif des `k` retenues ;
+- `pareto_paires.png` : nuages critère contre critère (front et sélection mis en évidence) ;
+- `pareto_3d.png` : nuage 3D (uniquement pour 3 critères) ;
+- `coordonnees_paralleles.png` : profil normalisé (1 = meilleur) de chaque trajectoire ;
+- `radar_selection.png` : radar des trajectoires retenues (à partir de 3 critères).
+
 ## Personnalisation
 
 Modifie la fonction `add_derived_columns()` dans `radar_plot.py` pour ajouter tes propres opérations métier.
