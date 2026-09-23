@@ -1,9 +1,10 @@
 """
 Sélection des k meilleures trajectoires sur plusieurs critères par étude de Pareto.
 
-Entrées : un dossier de CSV (un CSV = une trajectoire) et 2 à 4 critères à
+Entrées : un dossier de CSV (un CSV = une trajectoire) et 1 à 4 critères à
 compromettre (opérateur statistique appliqué à une grandeur, cf.
-`compare_trajectories.CRITERION_OPERATORS`). Chaque critère est à maximiser par
+`compare_trajectories.CRITERION_OPERATORS`). Avec un seul critère, il n'y a pas
+de compromis : les k meilleures valeurs sont retenues (après filtre éventuel). Chaque critère est à maximiser par
 défaut ; préfixe-le par "-" (ex. "-mean(pression)") ou fournis `senses` pour le
 minimiser.
 
@@ -16,12 +17,15 @@ Sorties (dans `output_dir`) :
   rang de Pareto, distance au point idéal, distance de crowding, score pondéré,
   ordre de classement et indicateur de sélection ;
 - `trajectoires_exclues.csv` : trajectoires écartées par le filtre, avec le motif ;
+- `histogrammes_criteres.png` : distribution de chaque critère avec gaussienne
+  ajustée, repères μ ± 1σ / 2σ et seuils du filtre (contrôle de l'hypothèse gaussienne) ;
+- `classement_critere.png` : valeurs triées du critère (cas mono-critère uniquement) ;
 - `trajectoires_selectionnees.csv` et `tableau_selection.png` : récapitulatif
   des k trajectoires retenues ;
 - `pareto_paires.png` : nuages de points critère contre critère (front de Pareto
-  et sélection mis en évidence) ;
+  et sélection mis en évidence, à partir de 2 critères) ;
 - `pareto_3d.png` : nuage 3D (uniquement pour 3 critères) ;
-- `coordonnees_paralleles.png` : profil normalisé de chaque trajectoire ;
+- `coordonnees_paralleles.png` : profil normalisé de chaque trajectoire (≥ 2 critères) ;
 - `radar_selection.png` : radar des trajectoires sélectionnées (à partir de 3 critères).
 
 Usage en ligne de commande (le sens se donne via --senses) :
@@ -37,6 +41,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 
 from radar_plot import add_derived_columns
 from compare_trajectories import (
@@ -77,8 +82,10 @@ def parse_objective(criterion, sense: str | None = None) -> tuple[str, str, str]
 
 
 def parse_objectives(criteria: list, senses: list[str] | None = None) -> list[tuple[str, str, str]]:
-    if not criteria or len(criteria) < 2:
-        raise ValueError("Une étude de Pareto nécessite au moins 2 critères")
+    if not criteria:
+        raise ValueError("Au moins un critère est nécessaire")
+    if len(criteria) == 1:
+        print("Un seul critère : classement direct par sa valeur (pas d'étude de Pareto à proprement parler).")
     if len(criteria) > 4:
         print(f"Attention : {len(criteria)} critères, les graphiques par paires seront nombreux.")
     if senses is not None and len(senses) != len(criteria):
@@ -498,6 +505,113 @@ def plot_parallel_coordinates(result: pd.DataFrame, output_path: Path, title: st
     print(f"Figure sauvegardée : {output_path}")
 
 
+def plot_single_criterion(
+    result: pd.DataFrame, output_path: Path, title: str,
+    excluded: pd.DataFrame | None = None, thresholds: dict | None = None,
+):
+    """
+    Cas mono-critère : valeurs triées du critère (barres), sélection en rouge,
+    exclues en orange hachuré à leur place dans le classement, seuils en pointillés.
+    """
+    label, sense = result.attrs["labels"][0], result.attrs["senses"][0]
+    frames = [result[[label, "selectionnee"]].assign(exclue=False)]
+    if excluded is not None and not excluded.empty:
+        frames.append(excluded[[label]].assign(selectionnee=False, exclue=True))
+    data = pd.concat(frames).sort_values(label, ascending=(sense == "min"))
+
+    fig, ax = plt.subplots(figsize=(max(8, 0.28 * len(data) + 2), 5.5))
+    x = np.arange(len(data))
+    colors = np.where(data["selectionnee"], "tab:red", np.where(data["exclue"], "tab:orange", "lightgray"))
+    bars = ax.bar(x, data[label], color=colors, edgecolor="gray", linewidth=0.5)
+    for bar, is_excl in zip(bars, data["exclue"]):
+        if is_excl:
+            bar.set_hatch("///")
+
+    if thresholds and label in thresholds:
+        for bound in thresholds[label]:
+            if np.isfinite(bound):
+                ax.axhline(bound, color="tab:orange", linestyle="--", linewidth=1, label="Seuil du filtre")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(data.index, rotation=90, fontsize=7)
+    ax.set_ylabel(_axis_label(label, sense))
+    ax.set_xlabel("Trajectoires (classées de la meilleure à la moins bonne)")
+    ax.set_title(title)
+    ax.grid(axis="y", alpha=0.3)
+
+    handles = [Patch(color="tab:red", label="Sélectionnées"), Patch(color="lightgray", label="Autres")]
+    if excluded is not None and not excluded.empty:
+        handles.append(Patch(facecolor="tab:orange", hatch="///", label="Exclues (scénarios extrêmes)"))
+    if thresholds and label in thresholds and any(np.isfinite(b) for b in thresholds[label]):
+        handles.append(plt.Line2D([], [], color="tab:orange", linestyle="--", label="Seuil du filtre"))
+    ax.legend(handles=handles, fontsize=8)
+    plt.tight_layout()
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Figure sauvegardée : {output_path}")
+
+
+def plot_criteria_histograms(
+    table: pd.DataFrame, labels: list[str], output_path: Path,
+    thresholds: dict | None = None, bins: int | str = "auto",
+):
+    """
+    Histogramme de chaque critère sur la population complète (avant filtre), avec la
+    densité gaussienne ajustée (μ, σ), les repères μ, μ ± 1σ, μ ± 2σ et les seuils du
+    filtre éventuel, pour juger visuellement l'hypothèse gaussienne. L'asymétrie et
+    l'aplatissement (excès de kurtosis) empiriques sont indiqués : ~0 pour une gaussienne.
+    """
+    n = len(labels)
+    n_cols = min(2, n)
+    n_rows = int(np.ceil(n / n_cols))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6.5 * n_cols, 4.2 * n_rows), squeeze=False)
+    flat = axes.ravel()
+
+    for ax, label in zip(flat, labels):
+        values = table[label].astype(float).dropna().values
+        mu, sigma = values.mean(), (values.std(ddof=1) if values.size > 1 else 0.0)
+        ax.hist(values, bins=bins, density=True, color="lightsteelblue", edgecolor="white",
+                label=f"Histogramme (N = {values.size})")
+
+        if sigma > 0:
+            grid = np.linspace(min(values.min(), mu - 3 * sigma), max(values.max(), mu + 3 * sigma), 300)
+            pdf = np.exp(-0.5 * ((grid - mu) / sigma) ** 2) / (sigma * np.sqrt(2 * np.pi))
+            ax.plot(grid, pdf, color="tab:blue", linewidth=1.8, label=f"Gaussienne ajustée (μ = {mu:.4g}, σ = {sigma:.3g})")
+            ax.axvline(mu, color="green", linewidth=1, label="μ")
+            for m, style in ((1, ":"), (2, "--")):
+                ax.axvline(mu + m * sigma, color="gray", linestyle=style, linewidth=1, label=f"μ ± {m}σ")
+                ax.axvline(mu - m * sigma, color="gray", linestyle=style, linewidth=1)
+
+        if thresholds and label in thresholds:
+            for bound in thresholds[label]:
+                if np.isfinite(bound):
+                    ax.axvline(bound, color="tab:orange", linestyle="--", linewidth=1.6, label="Seuil du filtre")
+
+        series = pd.Series(values)
+        skew = series.skew() if values.size > 2 else np.nan
+        kurt = series.kurt() if values.size > 3 else np.nan
+        ax.set_title(f"{label}\nasymétrie = {skew:.2f}, excès de kurtosis = {kurt:.2f}", fontsize=10)
+        ax.set_xlabel(label)
+        ax.set_ylabel("Densité")
+        ax.grid(alpha=0.3)
+        handles, leg_labels = ax.get_legend_handles_labels()
+        unique = dict(zip(leg_labels, handles))
+        ax.legend(unique.values(), unique.keys(), fontsize=7)
+
+    for ax in flat[n:]:
+        ax.set_visible(False)
+
+    fig.suptitle("Distribution des critères et hypothèse gaussienne", fontsize=13)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Figure sauvegardée : {output_path}")
+
+
 def save_summary_table(selected: pd.DataFrame, output_dir: Path, title: str) -> pd.DataFrame:
     """
     Construit le tableau récapitulatif des trajectoires sélectionnées
@@ -566,8 +680,9 @@ def select_trajectories_pareto(
     critères par étude de Pareto.
 
     - `csv_folder` : dossier contenant un CSV par trajectoire ;
-    - `criteria` : 2 à 4 critères "operateur(colonne)" (ou tuples), maximisés par
-      défaut ; préfixe "-" ou `senses=["max", "min", ...]` pour minimiser ;
+    - `criteria` : 1 à 4 critères "operateur(colonne)" (ou tuples), maximisés par
+      défaut ; préfixe "-" ou `senses=["max", "min", ...]` pour minimiser. Avec un
+      seul critère, les trajectoires sont simplement classées par sa valeur ;
     - `k` : nombre de trajectoires à retenir ;
     - `method` : départage au sein d'un front ("ideal", "crowding", "weighted_sum") ;
     - `weights` : poids des critères pour "ideal" et "weighted_sum".
@@ -585,7 +700,9 @@ def select_trajectories_pareto(
 
     Les trajectoires conservées sont classées par front de Pareto (rang 1 = non
     dominées), puis départagées par `method` ; les `k` premières sont sélectionnées.
-    Les graphiques et tableaux sont écrits dans `output_dir`.
+    Les graphiques et tableaux sont écrits dans `output_dir`, dont un histogramme de
+    chaque critère (population complète, gaussienne ajustée, seuils) pour contrôler
+    l'hypothèse gaussienne sous-jacente au filtre en sigma.
 
     Retourne (tableau récapitulatif des sélectionnées, classement complet).
     """
@@ -609,6 +726,7 @@ def select_trajectories_pareto(
         derive_columns=derive_columns, extra_criteria=extra_criteria,
     )
 
+    full_table = table
     thresholds = None
     excluded = None
     if filtering:
@@ -640,18 +758,34 @@ def select_trajectories_pareto(
         excluded.to_csv(excluded_path, float_format="%.6g")
         print(f"Trajectoires exclues sauvegardées : {excluded_path}")
 
-    summary = save_summary_table(selected, output_dir, title=f"Top {k} — compromis de Pareto ({method})")
+    single = len(objectives) == 1
+    summary_title = (f"Top {k} — classement mono-critère" if single
+                     else f"Top {k} — compromis de Pareto ({method})")
+    summary = save_summary_table(selected, output_dir, title=summary_title)
 
     if make_plots:
+        objective_labels = result.attrs["labels"]
+        histogram_labels = objective_labels + [l for l in filter_labels if l not in objective_labels]
+        plot_criteria_histograms(full_table, histogram_labels,
+                                 output_dir / "histogrammes_criteres.png", thresholds=thresholds)
+
         n_front = int((result["rang_pareto"] == 1).sum())
-        base_title = f"Étude de Pareto — {len(result)} trajectoires, front de {n_front}, top {k}"
+        if single:
+            base_title = f"Classement mono-critère — {len(result)} trajectoires, top {k}"
+        else:
+            base_title = f"Étude de Pareto — {len(result)} trajectoires, front de {n_front}, top {k}"
         if excluded is not None:
             base_title += f" ({len(excluded)} exclue(s) par le filtre)"
-        plot_pareto_pairs(result, output_dir / "pareto_paires.png", base_title,
-                          excluded=excluded, thresholds=thresholds)
+
+        if single:
+            plot_single_criterion(result, output_dir / "classement_critere.png", base_title,
+                                  excluded=excluded, thresholds=thresholds)
+        else:
+            plot_pareto_pairs(result, output_dir / "pareto_paires.png", base_title,
+                              excluded=excluded, thresholds=thresholds)
+            plot_parallel_coordinates(result, output_dir / "coordonnees_paralleles.png", base_title)
         if len(objectives) == 3:
             plot_pareto_3d(result, output_dir / "pareto_3d.png", base_title, excluded=excluded)
-        plot_parallel_coordinates(result, output_dir / "coordonnees_paralleles.png", base_title)
         if len(objectives) >= 3:
             plot_comparison_radar(
                 selected[result.attrs["labels"]],
@@ -669,7 +803,7 @@ def main():
     parser.add_argument("csv_folder", help="Dossier contenant un CSV par trajectoire")
     parser.add_argument(
         "--criteria", nargs="+", required=True,
-        help="Critères 'operateur(colonne)' (2 à 4), maximisés par défaut",
+        help="Critères 'operateur(colonne)' (1 à 4), maximisés par défaut",
     )
     parser.add_argument(
         "--senses", nargs="+", choices=("max", "min"), default=None,

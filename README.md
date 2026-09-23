@@ -191,6 +191,9 @@ chemin = compare_time_series_grid(
 Le script `selection_pareto.py` trouve les `k` trajectoires réalisant le meilleur compromis
 entre plusieurs critères (2 à 4). L'entrée est un dossier contenant un CSV par trajectoire
 et la liste des critères à compromettre (même syntaxe que `compare_trajectories`).
+Avec un seul critère, il n'y a pas de compromis : les `k` meilleures valeurs sont retenues
+(filtre des scénarios extrêmes applicable de la même façon) et un graphique `classement_critere.png`
+remplace les nuages de points.
 
 ```python
 from selection_pareto import select_trajectories_pareto
@@ -261,6 +264,10 @@ Sorties écrites dans `output_dir` :
 - `classement_pareto.csv` : toutes les trajectoires avec valeurs des critères, `rang_pareto`,
   `distance_ideal`, `crowding`, `score_pondere`, `ordre` et `selectionnee` ;
 - `trajectoires_exclues.csv` : trajectoires écartées par le filtre (si activé), avec le motif ;
+- `histogrammes_criteres.png` : histogramme de chaque critère sur la population complète, avec
+  gaussienne ajustée, repères `μ ± 1σ` / `μ ± 2σ`, seuils du filtre, asymétrie et excès de kurtosis
+  (≈ 0 pour une gaussienne), pour vérifier l'hypothèse gaussienne du filtre en sigma ;
+- `classement_critere.png` : valeurs triées du critère avec sélection et exclues (cas mono-critère) ;
 - `trajectoires_selectionnees.csv` et `tableau_selection.png` : récapitulatif des `k` retenues ;
 - `pareto_paires.png` : nuages critère contre critère (front et sélection mis en évidence) ;
 - `pareto_3d.png` : nuage 3D (uniquement pour 3 critères) ;
