@@ -214,6 +214,9 @@ python selection_pareto.py mes_csv \
   --senses max min max -k 5 --output-dir resultats_pareto
 ```
 
+Une note technique détaillant la méthode (équations, choix possibles, limites) est disponible dans
+`docs/methode_selection_pareto_2sigma.docx`.
+
 Principe :
 1. chaque critère est calculé pour chaque CSV du dossier (nom de trajectoire = nom du fichier) ;
 2. les trajectoires sont classées par **fronts de Pareto** successifs (rang 1 = non dominées) ;
