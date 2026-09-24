@@ -228,10 +228,38 @@ Principe :
    somme pondérée ;
 4. les `k` premières du classement sont sélectionnées.
 
+### Pré-filtre par bornes absolues
+
+Avant tout traitement statistique, l'utilisateur peut fixer pour chaque critère un seuil
+inférieur et/ou supérieur (`None` = borne ouverte). Les trajectoires hors de ces bornes sont
+écartées **avant** le calcul des statistiques (moyenne, écart-type, quantiles) du filtre suivant,
+qui ne sont donc pas biaisées par des scénarios manifestement hors domaine :
+
+```python
+resume, classement = select_trajectories_pareto(
+    csv_folder="mes_csv",
+    criteria=["max(temperature)", "-mean(pression)"],
+    k=5,
+    bounds={"max(temperature)": (None, 300), "mean(pression)": (9e4, 1.2e5)},
+    outlier_sigma=2.0,
+)
+```
+
+```bash
+python selection_pareto.py mes_csv --criteria "max(temperature)" "mean(pression)" --senses max min -k 5 \
+  --bounds "max(temperature)" none 300 --bounds "mean(pression)" 9e4 1.2e5 --outlier-sigma 2
+```
+
+Les critères de `bounds` peuvent ne pas être des objectifs (ils sont alors calculés pour le
+pré-filtre). Les trajectoires hors bornes sont listées avec leur motif dans
+`trajectoires_hors_bornes.csv`, tracées en croix violettes avec les bornes en traits pleins,
+et exclues des histogrammes (qui portent sur la population servant aux statistiques).
+
 ### Filtre des scénarios extrêmes
 
-Pour ne retenir que les scénarios réalistes, un filtre optionnel écarte, **avant** l'étude de
-Pareto, les trajectoires dont un critère dépasse un seuil de sa distribution :
+Pour ne retenir que les scénarios réalistes, un filtre optionnel écarte, **après** le pré-filtre
+par bornes et **avant** l'étude de Pareto, les trajectoires dont un critère dépasse un seuil de
+sa distribution :
 
 ```python
 resume, classement = select_trajectories_pareto(
@@ -263,7 +291,8 @@ de points, où les seuils sont tracés en pointillés.
 Sorties écrites dans `output_dir` :
 - `classement_pareto.csv` : toutes les trajectoires avec valeurs des critères, `rang_pareto`,
   `distance_ideal`, `crowding`, `score_pondere`, `ordre` et `selectionnee` ;
-- `trajectoires_exclues.csv` : trajectoires écartées par le filtre (si activé), avec le motif ;
+- `trajectoires_hors_bornes.csv` : trajectoires écartées par le pré-filtre par bornes (si activé), avec le motif ;
+- `trajectoires_exclues.csv` : trajectoires écartées par le filtre statistique (si activé), avec le motif ;
 - `histogrammes_criteres.png` : histogramme de chaque critère sur la population complète, avec
   gaussienne ajustée, repères `μ ± 1σ` / `μ ± 2σ`, seuils du filtre, asymétrie et excès de kurtosis
   (≈ 0 pour une gaussienne), pour vérifier l'hypothèse gaussienne du filtre en sigma ;

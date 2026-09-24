@@ -8,15 +8,20 @@ de compromis : les k meilleures valeurs sont retenues (après filtre éventuel).
 défaut ; préfixe-le par "-" (ex. "-mean(pression)") ou fournis `senses` pour le
 minimiser.
 
-Un filtre optionnel écarte au préalable les scénarios extrêmes : trajectoires dont
-un critère dépasse un quantile empirique (`outlier_quantile=0.95`) ou
-moyenne + N écarts-types (`outlier_sigma=2.0`) de sa distribution.
+Deux filtres optionnels, appliqués dans cet ordre avant l'étude de Pareto :
+1. un pré-filtre par bornes absolues fixées par l'utilisateur (`bounds`), qui écarte
+   les trajectoires hors du domaine d'étude afin que les statistiques du filtre
+   suivant ne soient pas biaisées ;
+2. un filtre statistique des scénarios extrêmes : trajectoires dont un critère
+   dépasse un quantile empirique (`outlier_quantile=0.95`) ou
+   moyenne + N écarts-types (`outlier_sigma=2.0`) de sa distribution.
 
 Sorties (dans `output_dir`) :
 - `classement_pareto.csv` : toutes les trajectoires avec valeurs des critères,
   rang de Pareto, distance au point idéal, distance de crowding, score pondéré,
   ordre de classement et indicateur de sélection ;
-- `trajectoires_exclues.csv` : trajectoires écartées par le filtre, avec le motif ;
+- `trajectoires_hors_bornes.csv` : trajectoires écartées par le pré-filtre, avec le motif ;
+- `trajectoires_exclues.csv` : trajectoires écartées par le filtre statistique, avec le motif ;
 - `histogrammes_criteres.png` : distribution de chaque critère avec gaussienne
   ajustée, repères μ ± 1σ / 2σ et seuils du filtre (contrôle de l'hypothèse gaussienne) ;
 - `classement_critere.png` : valeurs triées du critère (cas mono-critère uniquement) ;
@@ -36,6 +41,7 @@ import argparse
 import glob
 import itertools
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -185,12 +191,36 @@ def outlier_thresholds(
     return thresholds
 
 
+def parse_bounds(bounds: dict) -> dict[str, tuple[float, float]]:
+    """
+    Normalise les bornes utilisateur {critère: (basse, haute)} en
+    {"operateur(colonne)": (basse, haute)}, une borne absente (None) valant ±inf.
+
+    Le critère peut être une chaîne "max(temperature)" ou un tuple ("max", "temperature").
+    """
+    parsed = {}
+    for criterion, limits in bounds.items():
+        operator, column = parse_criterion(criterion)
+        label = objective_label(operator, column)
+        if not isinstance(limits, (tuple, list)) or len(limits) != 2:
+            raise ValueError(f"Les bornes de '{label}' doivent être un couple (basse, haute) : {limits}")
+        lo = -np.inf if limits[0] is None else float(limits[0])
+        hi = np.inf if limits[1] is None else float(limits[1])
+        if lo > hi:
+            raise ValueError(f"Bornes incohérentes pour '{label}' : basse {lo:g} > haute {hi:g}")
+        parsed[label] = (lo, hi)
+    return parsed
+
+
 def filter_outliers(
     table: pd.DataFrame,
     thresholds: dict[str, tuple[float, float]],
+    filter_name: str = "Le filtre des scénarios extrêmes",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Sépare les trajectoires réalistes des trajectoires extrêmes selon `thresholds`.
+    Sépare les trajectoires conservées des trajectoires exclues selon `thresholds`
+    ({critère: (basse, haute)}), qu'il s'agisse de seuils statistiques ou de bornes
+    fixées par l'utilisateur.
 
     Une trajectoire est exclue dès qu'un de ses critères sort strictement de
     l'intervalle [basse, haute]. Retourne (conservées, exclues) ; le tableau des
@@ -210,7 +240,7 @@ def filter_outliers(
     excluded["motif_exclusion"] = reasons[excluded_mask].str.rstrip(" ;")
 
     if kept.empty:
-        raise ValueError("Le filtre des scénarios extrêmes exclut toutes les trajectoires")
+        raise ValueError(f"{filter_name} exclut toutes les trajectoires")
     return kept, excluded
 
 
@@ -355,30 +385,49 @@ def _axis_label(label: str, sense: str) -> str:
     return f"{label} {'↑' if sense == 'max' else '↓'}"
 
 
-def _draw_thresholds(ax, thresholds: dict | None, x: str, y: str):
-    if not thresholds:
-        return
-    style = {"color": "tab:orange", "linestyle": "--", "linewidth": 1, "alpha": 0.8, "zorder": 0}
-    for bound in thresholds.get(x, ()):
-        if np.isfinite(bound):
-            ax.axvline(bound, **style)
-    for bound in thresholds.get(y, ()):
-        if np.isfinite(bound):
-            ax.axhline(bound, **style)
+@dataclass
+class ExclusionLayer:
+    """Trajectoires exclues par un filtre et seuils associés, pour les graphiques."""
+    name: str
+    excluded: pd.DataFrame
+    thresholds: dict[str, tuple[float, float]]
+    color: str = "tab:orange"
+    linestyle: str = "--"
+    marker: str = "x"
+
+    @property
+    def has_excluded(self) -> bool:
+        return self.excluded is not None and not self.excluded.empty
+
+    def finite_bounds(self, label: str) -> list[float]:
+        return [b for b in self.thresholds.get(label, ()) if np.isfinite(b)]
+
+
+def _draw_thresholds(ax, layers: list[ExclusionLayer], x: str, y: str | None = None, vertical: bool = True):
+    """Trace les seuils de chaque couche : ceux de `x` en verticales (ou horizontales si
+    `vertical=False`), ceux de `y` en horizontales."""
+    for layer in layers:
+        style = {"color": layer.color, "linestyle": layer.linestyle, "linewidth": 1.2, "alpha": 0.85, "zorder": 0}
+        for bound in layer.finite_bounds(x):
+            (ax.axvline if vertical else ax.axhline)(bound, **style)
+        if y is not None:
+            for bound in layer.finite_bounds(y):
+                ax.axhline(bound, **style)
 
 
 def _scatter_layers(
     ax, result: pd.DataFrame, x: str, y: str, connect_front: bool,
-    excluded: pd.DataFrame | None = None, thresholds: dict | None = None,
+    layers: list[ExclusionLayer] = (),
 ):
     front = result[result["rang_pareto"] == 1]
     selected = result[result["selectionnee"]]
     others = result[~result["selectionnee"]]
 
-    _draw_thresholds(ax, thresholds, x, y)
-    if excluded is not None and not excluded.empty:
-        ax.scatter(excluded[x], excluded[y], s=28, marker="x", color="tab:orange",
-                   linewidth=0.9, label="Exclues (scénarios extrêmes)", zorder=1)
+    _draw_thresholds(ax, layers, x, y)
+    for layer in layers:
+        if layer.has_excluded:
+            ax.scatter(layer.excluded[x], layer.excluded[y], s=28, marker=layer.marker,
+                       color=layer.color, linewidth=0.9, label=f"Exclues ({layer.name})", zorder=1)
     ax.scatter(others[x], others[y], s=22, color="lightgray", edgecolor="gray",
                linewidth=0.4, label="Toutes les trajectoires", zorder=1)
     front_only = front[~front["selectionnee"]]
@@ -395,13 +444,21 @@ def _scatter_layers(
     ax.grid(alpha=0.3)
 
 
+def _threshold_legend_handles(layers: list[ExclusionLayer]):
+    handles, labels = [], []
+    for layer in layers:
+        if any(layer.finite_bounds(label) for label in layer.thresholds):
+            handles.append(plt.Line2D([], [], color=layer.color, linestyle=layer.linestyle, linewidth=1.2))
+            labels.append(f"Seuils ({layer.name})")
+    return handles, labels
+
+
 def plot_pareto_pairs(
-    result: pd.DataFrame, output_path: Path, title: str,
-    excluded: pd.DataFrame | None = None, thresholds: dict | None = None,
+    result: pd.DataFrame, output_path: Path, title: str, layers: list[ExclusionLayer] = (),
 ):
     """
     Nuage de points pour chaque paire de critères (un seul panneau pour 2 critères).
-    Les trajectoires exclues par le filtre et les seuils sont tracés si fournis.
+    Les trajectoires exclues par les filtres et leurs seuils sont tracés par couche.
     """
     labels, senses = result.attrs["labels"], result.attrs["senses"]
     pairs = list(itertools.combinations(range(len(labels)), 2))
@@ -412,19 +469,18 @@ def plot_pareto_pairs(
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.8 * n_cols, 4.8 * n_rows), squeeze=False)
     flat = axes.ravel()
     for ax, (i, j) in zip(flat, pairs):
-        _scatter_layers(ax, result, labels[i], labels[j], connect_front=(len(labels) == 2),
-                        excluded=excluded, thresholds=thresholds)
+        _scatter_layers(ax, result, labels[i], labels[j], connect_front=(len(labels) == 2), layers=layers)
         ax.set_xlabel(_axis_label(labels[i], senses[i]))
         ax.set_ylabel(_axis_label(labels[j], senses[j]))
     for ax in flat[n:]:
         ax.set_visible(False)
 
     handles, leg_labels = flat[0].get_legend_handles_labels()
-    if thresholds:
-        handles.append(plt.Line2D([], [], color="tab:orange", linestyle="--", linewidth=1))
-        leg_labels.append("Seuils du filtre")
-    fig.legend(handles, leg_labels, loc="upper center", ncol=min(len(leg_labels), 5), frameon=False,
-               bbox_to_anchor=(0.5, 0.965))
+    extra_handles, extra_labels = _threshold_legend_handles(layers)
+    handles += extra_handles
+    leg_labels += extra_labels
+    fig.legend(handles, leg_labels, loc="upper center", ncol=min(len(leg_labels), 4), frameon=False,
+               bbox_to_anchor=(0.5, 0.965), fontsize=9)
     fig.suptitle(title, fontsize=13, y=0.995)
     fig.tight_layout(rect=(0, 0, 1, 0.92))
 
@@ -435,7 +491,7 @@ def plot_pareto_pairs(
 
 
 def plot_pareto_3d(
-    result: pd.DataFrame, output_path: Path, title: str, excluded: pd.DataFrame | None = None
+    result: pd.DataFrame, output_path: Path, title: str, layers: list[ExclusionLayer] = (),
 ):
     """Nuage 3D des trois critères (front et sélection mis en évidence)."""
     labels, senses = result.attrs["labels"], result.attrs["senses"]
@@ -446,9 +502,11 @@ def plot_pareto_3d(
 
     fig = plt.figure(figsize=(9, 8))
     ax = fig.add_subplot(111, projection="3d")
-    if excluded is not None and not excluded.empty:
-        ax.scatter(excluded[x], excluded[y], excluded[z], s=24, marker="x", color="tab:orange",
-                   linewidth=0.9, label="Exclues (scénarios extrêmes)")
+    for layer in layers:
+        if layer.has_excluded:
+            ax.scatter(layer.excluded[x], layer.excluded[y], layer.excluded[z], s=24,
+                       marker=layer.marker, color=layer.color, linewidth=0.9,
+                       label=f"Exclues ({layer.name})")
     ax.scatter(others[x], others[y], others[z], s=18, color="lightgray", edgecolor="gray",
                linewidth=0.4, label="Toutes les trajectoires")
     ax.scatter(front[x], front[y], front[z], s=36, color="tab:blue", label="Front de Pareto")
@@ -506,31 +564,29 @@ def plot_parallel_coordinates(result: pd.DataFrame, output_path: Path, title: st
 
 
 def plot_single_criterion(
-    result: pd.DataFrame, output_path: Path, title: str,
-    excluded: pd.DataFrame | None = None, thresholds: dict | None = None,
+    result: pd.DataFrame, output_path: Path, title: str, layers: list[ExclusionLayer] = (),
 ):
     """
     Cas mono-critère : valeurs triées du critère (barres), sélection en rouge,
-    exclues en orange hachuré à leur place dans le classement, seuils en pointillés.
+    exclues hachurées (couleur de leur filtre) à leur place dans le classement,
+    seuils de chaque filtre en lignes horizontales.
     """
     label, sense = result.attrs["labels"][0], result.attrs["senses"][0]
-    frames = [result[[label, "selectionnee"]].assign(exclue=False)]
-    if excluded is not None and not excluded.empty:
-        frames.append(excluded[[label]].assign(selectionnee=False, exclue=True))
+    frames = [result[[label, "selectionnee"]].assign(couleur="lightgray", exclue=False)]
+    frames[0].loc[frames[0]["selectionnee"], "couleur"] = "tab:red"
+    for layer in layers:
+        if layer.has_excluded:
+            frames.append(layer.excluded[[label]].assign(selectionnee=False, couleur=layer.color, exclue=True))
     data = pd.concat(frames).sort_values(label, ascending=(sense == "min"))
 
     fig, ax = plt.subplots(figsize=(max(8, 0.28 * len(data) + 2), 5.5))
     x = np.arange(len(data))
-    colors = np.where(data["selectionnee"], "tab:red", np.where(data["exclue"], "tab:orange", "lightgray"))
-    bars = ax.bar(x, data[label], color=colors, edgecolor="gray", linewidth=0.5)
+    bars = ax.bar(x, data[label], color=data["couleur"], edgecolor="gray", linewidth=0.5)
     for bar, is_excl in zip(bars, data["exclue"]):
         if is_excl:
             bar.set_hatch("///")
 
-    if thresholds and label in thresholds:
-        for bound in thresholds[label]:
-            if np.isfinite(bound):
-                ax.axhline(bound, color="tab:orange", linestyle="--", linewidth=1, label="Seuil du filtre")
+    _draw_thresholds(ax, layers, label, vertical=False)
 
     ax.set_xticks(x)
     ax.set_xticklabels(data.index, rotation=90, fontsize=7)
@@ -540,10 +596,12 @@ def plot_single_criterion(
     ax.grid(axis="y", alpha=0.3)
 
     handles = [Patch(color="tab:red", label="Sélectionnées"), Patch(color="lightgray", label="Autres")]
-    if excluded is not None and not excluded.empty:
-        handles.append(Patch(facecolor="tab:orange", hatch="///", label="Exclues (scénarios extrêmes)"))
-    if thresholds and label in thresholds and any(np.isfinite(b) for b in thresholds[label]):
-        handles.append(plt.Line2D([], [], color="tab:orange", linestyle="--", label="Seuil du filtre"))
+    for layer in layers:
+        if layer.has_excluded:
+            handles.append(Patch(facecolor=layer.color, hatch="///", label=f"Exclues ({layer.name})"))
+        if layer.finite_bounds(label):
+            handles.append(plt.Line2D([], [], color=layer.color, linestyle=layer.linestyle,
+                                      label=f"Seuils ({layer.name})"))
     ax.legend(handles=handles, fontsize=8)
     plt.tight_layout()
 
@@ -555,13 +613,15 @@ def plot_single_criterion(
 
 def plot_criteria_histograms(
     table: pd.DataFrame, labels: list[str], output_path: Path,
-    thresholds: dict | None = None, bins: int | str = "auto",
+    layers: list[ExclusionLayer] = (), bins: int | str = "auto",
+    subtitle: str | None = None,
 ):
     """
-    Histogramme de chaque critère sur la population complète (avant filtre), avec la
-    densité gaussienne ajustée (μ, σ), les repères μ, μ ± 1σ, μ ± 2σ et les seuils du
-    filtre éventuel, pour juger visuellement l'hypothèse gaussienne. L'asymétrie et
-    l'aplatissement (excès de kurtosis) empiriques sont indiqués : ~0 pour une gaussienne.
+    Histogramme de chaque critère sur la population servant au filtre statistique
+    (après pré-filtre par bornes éventuel), avec la densité gaussienne ajustée (μ, σ),
+    les repères μ, μ ± 1σ, μ ± 2σ et les seuils des filtres, pour juger visuellement
+    l'hypothèse gaussienne. L'asymétrie et l'aplatissement (excès de kurtosis)
+    empiriques sont indiqués : ~0 pour une gaussienne.
     """
     n = len(labels)
     n_cols = min(2, n)
@@ -584,10 +644,26 @@ def plot_criteria_histograms(
                 ax.axvline(mu + m * sigma, color="gray", linestyle=style, linewidth=1, label=f"μ ± {m}σ")
                 ax.axvline(mu - m * sigma, color="gray", linestyle=style, linewidth=1)
 
-        if thresholds and label in thresholds:
-            for bound in thresholds[label]:
-                if np.isfinite(bound):
-                    ax.axvline(bound, color="tab:orange", linestyle="--", linewidth=1.6, label="Seuil du filtre")
+        # Cadre : données, gaussienne (μ ± 3σ) et seuils statistiques ; les bornes utilisateur
+        # lointaines ne doivent pas écraser l'histogramme.
+        x_lo, x_hi = values.min(), values.max()
+        if sigma > 0:
+            x_lo, x_hi = min(x_lo, mu - 3 * sigma), max(x_hi, mu + 3 * sigma)
+        for layer in layers:
+            if layer.linestyle == "--":
+                for bound in layer.finite_bounds(label):
+                    x_lo, x_hi = min(x_lo, bound), max(x_hi, bound)
+        margin = 0.03 * (x_hi - x_lo) if x_hi > x_lo else 1.0
+        x_lo, x_hi = x_lo - margin, x_hi + margin
+        ax.set_xlim(x_lo, x_hi)
+
+        for layer in layers:
+            for bound in layer.finite_bounds(label):
+                if x_lo <= bound <= x_hi:
+                    ax.axvline(bound, color=layer.color, linestyle=layer.linestyle, linewidth=1.6,
+                               label=f"Seuils ({layer.name})")
+                else:
+                    ax.plot([], [], " ", label=f"Borne {layer.name} = {bound:.4g} (hors cadre)")
 
         series = pd.Series(values)
         skew = series.skew() if values.size > 2 else np.nan
@@ -603,8 +679,11 @@ def plot_criteria_histograms(
     for ax in flat[n:]:
         ax.set_visible(False)
 
-    fig.suptitle("Distribution des critères et hypothèse gaussienne", fontsize=13)
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    suptitle = "Distribution des critères et hypothèse gaussienne"
+    if subtitle:
+        suptitle += f"\n{subtitle}"
+    fig.suptitle(suptitle, fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=200, bbox_inches="tight")
@@ -674,6 +753,7 @@ def select_trajectories_pareto(
     outlier_sigma: float | None = None,
     outlier_side: str = "upper",
     outlier_criteria: list | None = None,
+    bounds: dict | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Sélectionne les `k` trajectoires réalisant le meilleur compromis entre plusieurs
@@ -687,7 +767,16 @@ def select_trajectories_pareto(
     - `method` : départage au sein d'un front ("ideal", "crowding", "weighted_sum") ;
     - `weights` : poids des critères pour "ideal" et "weighted_sum".
 
-    Filtre optionnel des scénarios extrêmes, appliqué avant l'étude de Pareto :
+    Pré-filtre optionnel par bornes absolues, appliqué en premier :
+    - `bounds` : {critère: (basse, haute)}, ex. {"max(temperature)": (None, 150),
+      "mean(pression)": (9.5e4, 1.2e5)} ; une borne None est ouverte. Les trajectoires
+      dont un critère sort de [basse, haute] sont écartées avant le calcul des
+      statistiques (μ, σ, quantiles) du filtre suivant, qui ne sont donc pas biaisées
+      par des scénarios manifestement hors domaine. Les critères de `bounds` peuvent
+      ne pas être des objectifs. Les exclues sont listées dans
+      `trajectoires_hors_bornes.csv` et tracées en violet.
+
+    Filtre optionnel des scénarios extrêmes, appliqué ensuite :
     - `outlier_quantile` (ex. 0.95) exclut les trajectoires dont un critère dépasse
       le quantile empirique 95 % de sa distribution ; ou
     - `outlier_sigma` (ex. 2.0) exclut au-delà de moyenne + 2 écarts-types ;
@@ -713,20 +802,34 @@ def select_trajectories_pareto(
     filtering = outlier_quantile is not None or outlier_sigma is not None
 
     filter_labels = [objective_label(op, col) for op, col, _ in objectives]
-    extra_criteria = None
+    extra_criteria = []
     if outlier_criteria is not None:
         if not filtering:
             raise ValueError("`outlier_criteria` nécessite `outlier_quantile` ou `outlier_sigma`")
         parsed = [parse_criterion(c) for c in outlier_criteria]
         filter_labels = [objective_label(op, col) for op, col in parsed]
-        extra_criteria = parsed
+        extra_criteria += parsed
+
+    parsed_bounds = parse_bounds(bounds) if bounds else None
+    if parsed_bounds:
+        extra_criteria += [parse_criterion(label) for label in parsed_bounds]
 
     table = load_folder_criteria(
         csv_folder, objectives, pattern=pattern, time_column=time_column,
-        derive_columns=derive_columns, extra_criteria=extra_criteria,
+        derive_columns=derive_columns, extra_criteria=extra_criteria or None,
     )
 
-    full_table = table
+    layers: list[ExclusionLayer] = []
+    excluded_by_bounds = None
+    if parsed_bounds:
+        table, excluded_by_bounds = filter_outliers(table, parsed_bounds, filter_name="Le pré-filtre par bornes")
+        layers.append(ExclusionLayer("hors bornes", excluded_by_bounds, parsed_bounds,
+                                     color="tab:purple", linestyle="-", marker="+"))
+        print(f"Pré-filtre par bornes : {len(excluded_by_bounds)} trajectoire(s) hors bornes, "
+              f"{len(table)} conservée(s) pour les statistiques.")
+
+    # Population de référence des statistiques du filtre (après pré-filtre par bornes).
+    stats_table = table
     thresholds = None
     excluded = None
     if filtering:
@@ -734,6 +837,7 @@ def select_trajectories_pareto(
             table, filter_labels, quantile=outlier_quantile, sigma=outlier_sigma, side=outlier_side
         )
         table, excluded = filter_outliers(table, thresholds)
+        layers.append(ExclusionLayer("scénarios extrêmes", excluded, thresholds))
         rule = (f"quantile {outlier_quantile:.0%}" if outlier_quantile is not None
                 else f"moyenne ± {outlier_sigma:g}σ")
         print(f"Filtre des scénarios extrêmes ({rule}, {outlier_side}) : "
@@ -753,6 +857,10 @@ def select_trajectories_pareto(
     ranking_path = output_dir / "classement_pareto.csv"
     result.to_csv(ranking_path, float_format="%.6g")
     print(f"Classement sauvegardé : {ranking_path}")
+    if excluded_by_bounds is not None:
+        bounds_path = output_dir / "trajectoires_hors_bornes.csv"
+        excluded_by_bounds.to_csv(bounds_path, float_format="%.6g")
+        print(f"Trajectoires hors bornes sauvegardées : {bounds_path}")
     if excluded is not None:
         excluded_path = output_dir / "trajectoires_exclues.csv"
         excluded.to_csv(excluded_path, float_format="%.6g")
@@ -765,27 +873,37 @@ def select_trajectories_pareto(
 
     if make_plots:
         objective_labels = result.attrs["labels"]
-        histogram_labels = objective_labels + [l for l in filter_labels if l not in objective_labels]
-        plot_criteria_histograms(full_table, histogram_labels,
-                                 output_dir / "histogrammes_criteres.png", thresholds=thresholds)
+        histogram_labels = list(objective_labels)
+        for label in [*filter_labels, *(parsed_bounds or {})]:
+            if label not in histogram_labels:
+                histogram_labels.append(label)
+        hist_subtitle = None
+        if excluded_by_bounds is not None:
+            hist_subtitle = (f"Population après pré-filtre par bornes : {len(stats_table)} trajectoires "
+                             f"({len(excluded_by_bounds)} hors bornes non représentées)")
+        plot_criteria_histograms(stats_table, histogram_labels, output_dir / "histogrammes_criteres.png",
+                                 layers=layers, subtitle=hist_subtitle)
 
         n_front = int((result["rang_pareto"] == 1).sum())
         if single:
             base_title = f"Classement mono-critère — {len(result)} trajectoires, top {k}"
         else:
             base_title = f"Étude de Pareto — {len(result)} trajectoires, front de {n_front}, top {k}"
+        notes = []
+        if excluded_by_bounds is not None:
+            notes.append(f"{len(excluded_by_bounds)} hors bornes")
         if excluded is not None:
-            base_title += f" ({len(excluded)} exclue(s) par le filtre)"
+            notes.append(f"{len(excluded)} exclue(s) par le filtre statistique")
+        if notes:
+            base_title += f" ({', '.join(notes)})"
 
         if single:
-            plot_single_criterion(result, output_dir / "classement_critere.png", base_title,
-                                  excluded=excluded, thresholds=thresholds)
+            plot_single_criterion(result, output_dir / "classement_critere.png", base_title, layers=layers)
         else:
-            plot_pareto_pairs(result, output_dir / "pareto_paires.png", base_title,
-                              excluded=excluded, thresholds=thresholds)
+            plot_pareto_pairs(result, output_dir / "pareto_paires.png", base_title, layers=layers)
             plot_parallel_coordinates(result, output_dir / "coordonnees_paralleles.png", base_title)
         if len(objectives) == 3:
-            plot_pareto_3d(result, output_dir / "pareto_3d.png", base_title, excluded=excluded)
+            plot_pareto_3d(result, output_dir / "pareto_3d.png", base_title, layers=layers)
         if len(objectives) >= 3:
             plot_comparison_radar(
                 selected[result.attrs["labels"]],
@@ -829,7 +947,18 @@ def main():
                         help="Queue de distribution filtrée (défaut : upper)")
     parser.add_argument("--outlier-criteria", nargs="+", default=None,
                         help="Critères 'operateur(colonne)' soumis au filtre (défaut : tous les critères)")
+    parser.add_argument(
+        "--bounds", nargs=3, action="append", default=None, metavar=("CRITERE", "BASSE", "HAUTE"),
+        help="Pré-filtre par bornes absolues, répétable : --bounds 'max(temperature)' none 150 "
+             "('none' ou '-' pour une borne ouverte)",
+    )
     args = parser.parse_args()
+
+    bounds = None
+    if args.bounds:
+        def _bound(text):
+            return None if text.strip().lower() in ("none", "-", "") else float(text)
+        bounds = {crit: (_bound(lo), _bound(hi)) for crit, lo, hi in args.bounds}
 
     summary, _ = select_trajectories_pareto(
         args.csv_folder,
@@ -847,6 +976,7 @@ def main():
         outlier_sigma=args.outlier_sigma,
         outlier_side=args.outlier_side,
         outlier_criteria=args.outlier_criteria,
+        bounds=bounds,
     )
 
     print("\nTrajectoires sélectionnées :")
